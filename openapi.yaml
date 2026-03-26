@@ -1,0 +1,74 @@
+openapi: 3.0.3
+info:
+  title: EchoMessagingService API
+  version: 0.1.0
+servers:
+  - url: /
+paths:
+  /healthz:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: OK
+  /callbacks/inbound/messaging:
+    post:
+      summary: Receive Bandwidth inbound webhook events
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                type: object
+      responses:
+        '200':
+          description: Processed
+  /message/list:
+    get:
+      summary: List stored inbound messages
+      responses:
+        '200':
+          description: Message list
+  /message/open:
+    get:
+      summary: Open one stored message
+      parameters:
+        - in: query
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Message JSON
+        '404':
+          description: Not found
+  /sendMessage:
+    post:
+      summary: Send outbound SMS via Bandwidth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [from, to, text]
+              properties:
+                from:
+                  type: string
+                  example: "+17149799911"
+                to:
+                  type: string
+                  example: "+17146120126"
+                text:
+                  type: string
+                  example: "Echo is alive; from Clawdy"
+      responses:
+        '200':
+          description: Sent
+        '400':
+          description: Validation failed
+        '502':
+          description: Provider failed

@@ -1,0 +1,11 @@
+services:
+  echo-messaging-service:
+    build: .
+    container_name: echo-messaging-service
+    env_file:
+      - .env
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./inbound:/app/inbound
+    restart: unless-stopped

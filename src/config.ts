@@ -1,0 +1,20 @@
+import { z } from 'zod';
+
+const envSchema = z.object({
+  NODE_ENV: z.string().default('development'),
+  PORT: z.coerce.number().default(3000),
+  BANDWIDTH_ACCOUNT_ID: z.string().min(1),
+  BANDWIDTH_API_TOKEN: z.string().min(1),
+  BANDWIDTH_API_SECRET: z.string().min(1),
+  BANDWIDTH_APPLICATION_ID: z.string().uuid(),
+  BANDWIDTH_MESSAGING_API_BASE_URL: z.string().url().default('https://messaging.bandwidth.com/api/v2'),
+  INBOUND_STORAGE_DIR: z.string().default('./inbound'),
+  PUBLIC_BASE_URL: z.string().default('http://localhost:3000'),
+  LOG_LEVEL: z.string().default('info')
+});
+
+export type AppConfig = z.infer<typeof envSchema>;
+
+export function loadConfig(): AppConfig {
+  return envSchema.parse(process.env);
+}
