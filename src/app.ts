@@ -24,6 +24,57 @@ export function buildApp() {
     res.json({ ok: true });
   });
 
+  app.get('/', (_req, res) => {
+    res.type('html').send(`<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Echo SMS Tester</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:720px;margin:40px auto;padding:0 16px}
+    input,textarea,button{width:100%;padding:10px;margin:8px 0;font-size:14px}
+    button{cursor:pointer}
+    pre{background:#111;color:#0f0;padding:12px;overflow:auto;white-space:pre-wrap}
+  </style>
+</head>
+<body>
+  <h1>Echo SMS Tester</h1>
+  <p>POSTs to <code>/sendMessage</code> and shows provider response/error.</p>
+  <label>From</label>
+  <input id="from" value="+17149799911" />
+  <label>To</label>
+  <input id="to" placeholder="+1..." />
+  <label>Text</label>
+  <textarea id="text" rows="4">Echo is alive; from Clawdy</textarea>
+  <button id="send">Send Message</button>
+  <pre id="out">Ready.</pre>
+<script>
+document.getElementById('send').addEventListener('click', async () => {
+  const out = document.getElementById('out');
+  out.textContent = 'Sending...';
+  try {
+    const payload = {
+      from: document.getElementById('from').value.trim(),
+      to: document.getElementById('to').value.trim(),
+      text: document.getElementById('text').value
+    };
+    const res = await fetch('/sendMessage', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    out.textContent = JSON.stringify({ status: res.status, data }, null, 2);
+  } catch (e) {
+    out.textContent = String(e);
+  }
+});
+</script>
+</body>
+</html>`);
+  });
+
   app.post('/callbacks/inbound/messaging', async (req, res) => {
     if (!Array.isArray(req.body)) {
       return res.status(400).json({ error: 'Payload must be an array' });

@@ -6,7 +6,7 @@ services:
     env_file:
       - .env
     expose:
-      - "3000"
+      - "3160"
     volumes:
       - ./inbound:/app/inbound
     restart: unless-stopped

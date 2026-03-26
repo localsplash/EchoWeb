@@ -3,6 +3,7 @@
 TypeScript/Express proof-of-concept for Bandwidth SMS send/receive.
 
 ## Endpoints
+- `GET /` (basic sendMessage UI)
 - `GET /healthz`
 - `POST /callbacks/inbound/messaging`
 - `GET /message/list`
