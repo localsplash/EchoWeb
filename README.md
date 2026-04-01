@@ -1,45 +1,28 @@
 # EchoWeb
 
-TypeScript/Express proof-of-concept for Bandwidth SMS send/receive.
+Frontend web app for Echo messaging.
 
-## Endpoints
-- `GET /` (basic sendMessage UI)
-- `GET /healthz`
-- External EchoService base URL: `https://io.echo.wisp.net`
-- Bandwidth webhooks should target `/webhooks/bandwidth/inbound` and `/webhooks/bandwidth/status`
-- `GET /message/list`
-- `GET /message/open?id=<messageId>`
-- `POST /sendMessage`
-- `GET /api-docs`
+## Architecture
+- **EchoWeb** = login/session + browser UI
+- **EchoService** = mid-tier API, Bandwidth integration, webhooks, and database access
+- **Production EchoService URL** = `https://io.echo.wisp.net`
+
+EchoWeb should not connect directly to MySQL.
+All data I/O flows through `ECHO_SERVICE_BASE_URL`.
 
 ## Local Run
 ```bash
 cp .env.example .env
-# fill environment values
 npm install
 npm run dev
 ```
 
-## Build & Run
-```bash
-npm run build
-npm start
-```
-
-## Docker
-```bash
-docker compose up -d --build
-```
-
 ## Required Environment
-- BANDWIDTH_ACCOUNT_ID
-- BANDWIDTH_API_TOKEN
-- BANDWIDTH_API_SECRET
-- BANDWIDTH_APPLICATION_ID
+- `ECHO_SERVICE_BASE_URL`
 
-## Example sendMessage
-```bash
-curl -X POST http://localhost:3000/sendMessage \
-  -H 'content-type: application/json' \
-  -d '{"from":"+17149799911","to":"+17146120126","text":"Echo is alive; from Clawdy"}'
-```
+## Dev Model
+For local development on Windows/macOS/Linux, run EchoWeb locally and point it at the shared mid-tier:
+
+- `ECHO_SERVICE_BASE_URL=https://io.echo.wisp.net`
+
+That lets a remote developer run the UI without needing MySQL or the Bandwidth webhook stack locally.

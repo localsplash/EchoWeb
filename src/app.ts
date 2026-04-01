@@ -1,59 +1,9 @@
 import express from 'express';
 import pinoHttp from 'pino-http';
 import pino from 'pino';
-import swaggerUi from 'swagger-ui-express';
-import YAML from 'yamljs';
 import { loadConfig } from './config';
-import { sendMessageSchema } from './schemas';
-import { InboundStorage } from './storage';
-import { BandwidthClient } from './bandwidthClient';
-import { createDb } from './db/client';
-import { MessageRepository, resolveEventTypeId } from './messageRepository';
 
-type EventPayload = {
-  type?: string;
-  description?: string;
-  errorCode?: number;
-  time?: string;
-  to?: string;
-  message?: {
-    id?: string;
-    from?: string;
-    to?: string;
-    text?: string;
-    time?: string;
-  };
-};
-
-function normalizeUs10(input: unknown): number {
-  if (!input) return 0;
-  const raw = Array.isArray(input) ? String(input[0] ?? '') : String(input);
-  const digits = raw.replace(/\D/g, '');
-  if (digits.length === 11 && digits.startsWith('1')) return Number(digits.slice(1));
-  if (digits.length === 10) return Number(digits);
-  return Number(digits || '0');
-}
-
-function toE164Us10(value: number | string): string {
-  const digits = String(value).replace(/\D/g, '');
-  const normalized = digits.length === 11 && digits.startsWith('1') ? digits.slice(1) : digits;
-  if (normalized.length !== 10) throw new Error('Phone number must be 10 digits');
-  return `+1${normalized}`;
-}
-
-function eventIcon(eventTypeId: number): string {
-  if (eventTypeId === 1) return '📩';
-  if (eventTypeId === 2) return '🕓';
-  if (eventTypeId === 4) return '✅';
-  if (eventTypeId === 8) return '❌';
-  return '💬';
-}
-
-function toMysqlDateTime3(input?: string): string {
-  const d = input ? new Date(input) : new Date();
-  const iso = d.toISOString();
-  return iso.replace('T', ' ').replace('Z', '').slice(0, 23);
-}
+type ApiMethod = 'GET' | 'POST' | 'DELETE';
 
 function parseCookie(req: express.Request, key: string): string | null {
   const raw = req.headers.cookie;
@@ -162,23 +112,34 @@ document.getElementById('compose').addEventListener('submit', async (e)=>{
 setThreadHeader(); loadConversations();
 </script></body></html>`;
 
+async function proxyEchoService(config: ReturnType<typeof loadConfig>, req: express.Request, path: string, method: ApiMethod, body?: unknown) {
+  const business = getBusinessNumberFromSession(req);
+  if (!business) return { status: 401, data: { error: 'Not logged in' } };
+
+  const url = new URL(path, config.ECHO_SERVICE_BASE_URL);
+  if (method === 'GET' || method === 'DELETE') url.searchParams.set('businessNumber', String(business));
+
+  const response = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: method === 'GET' ? undefined : JSON.stringify({ businessNumber: business, ...(body && typeof body === 'object' ? body : {}) })
+  });
+
+  const data = await response.json().catch(() => ({ error: 'Invalid response from EchoService' }));
+  return { status: response.status, data };
+}
+
 export function buildApp() {
   const config = loadConfig();
   const logger = pino({ level: config.LOG_LEVEL });
   const app = express();
-  const storage = new InboundStorage(config.INBOUND_STORAGE_DIR);
-  const bandwidth = new BandwidthClient(config);
-  const { db } = createDb(config);
-  const repo = new MessageRepository(db);
-
-  void storage.init();
 
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: false }));
   app.use(pinoHttp({ logger }));
 
   app.get('/healthz', (_req, res) => {
-    res.json({ ok: true });
+    res.json({ ok: true, service: 'EchoWeb' });
   });
 
   app.get('/', (req, res) => {
@@ -203,10 +164,8 @@ export function buildApp() {
 
   app.get('/api/conversations', async (req, res, next) => {
     try {
-      const business = getBusinessNumberFromSession(req);
-      if (!business) return res.status(401).json({ error: 'Not logged in' });
-      const items = await repo.listConversations(business);
-      return res.json({ items });
+      const result = await proxyEchoService(config, req, '/api/conversations', 'GET');
+      return res.status(result.status).json(result.data);
     } catch (error) {
       next(error);
     }
@@ -214,11 +173,8 @@ export function buildApp() {
 
   app.get('/api/conversations/:customer/messages', async (req, res, next) => {
     try {
-      const business = getBusinessNumberFromSession(req);
-      if (!business) return res.status(401).json({ error: 'Not logged in' });
-      const customer = normalizeUs10(String(req.params.customer));
-      const items = await repo.getConversationMessages(business, customer);
-      return res.json({ items });
+      const result = await proxyEchoService(config, req, `/api/conversations/${encodeURIComponent(req.params.customer)}/messages`, 'GET');
+      return res.status(result.status).json(result.data);
     } catch (error) {
       next(error);
     }
@@ -226,11 +182,8 @@ export function buildApp() {
 
   app.post('/api/conversations/:customer/read', async (req, res, next) => {
     try {
-      const business = getBusinessNumberFromSession(req);
-      if (!business) return res.status(401).json({ error: 'Not logged in' });
-      const customer = normalizeUs10(String(req.params.customer));
-      await repo.markConversationRead(business, customer);
-      return res.json({ ok: true });
+      const result = await proxyEchoService(config, req, `/api/conversations/${encodeURIComponent(req.params.customer)}/read`, 'POST');
+      return res.status(result.status).json(result.data);
     } catch (error) {
       next(error);
     }
@@ -238,11 +191,8 @@ export function buildApp() {
 
   app.post('/api/conversations/:customer/mark-unread', async (req, res, next) => {
     try {
-      const business = getBusinessNumberFromSession(req);
-      if (!business) return res.status(401).json({ error: 'Not logged in' });
-      const customer = normalizeUs10(String(req.params.customer));
-      await repo.markLatestConversationUnread(business, customer);
-      return res.json({ ok: true });
+      const result = await proxyEchoService(config, req, `/api/conversations/${encodeURIComponent(req.params.customer)}/mark-unread`, 'POST');
+      return res.status(result.status).json(result.data);
     } catch (error) {
       next(error);
     }
@@ -250,12 +200,8 @@ export function buildApp() {
 
   app.delete('/api/messages/:messageId', async (req, res, next) => {
     try {
-      const business = getBusinessNumberFromSession(req);
-      if (!business) return res.status(401).json({ error: 'Not logged in' });
-      const messageId = Number(req.params.messageId);
-      if (!messageId) return res.status(400).json({ error: 'messageId required' });
-      await repo.deleteMessage(messageId);
-      return res.json({ ok: true });
+      const result = await proxyEchoService(config, req, `/api/messages/${encodeURIComponent(req.params.messageId)}`, 'DELETE');
+      return res.status(result.status).json(result.data);
     } catch (error) {
       next(error);
     }
@@ -263,145 +209,21 @@ export function buildApp() {
 
   app.delete('/api/conversations/:customer', async (req, res, next) => {
     try {
-      const business = getBusinessNumberFromSession(req);
-      if (!business) return res.status(401).json({ error: 'Not logged in' });
-      const customer = normalizeUs10(String(req.params.customer));
-      await repo.deleteCustomer(business, customer);
-      return res.json({ ok: true });
+      const result = await proxyEchoService(config, req, `/api/conversations/${encodeURIComponent(req.params.customer)}`, 'DELETE');
+      return res.status(result.status).json(result.data);
     } catch (error) {
       next(error);
     }
   });
 
-  app.post('/api/conversations/:customer/send', async (req, res) => {
-    const parsed = sendMessageSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
-    }
-
+  app.post('/api/conversations/:customer/send', async (req, res, next) => {
     try {
-      const business = getBusinessNumberFromSession(req);
-      if (!business) return res.status(401).json({ error: 'Not logged in' });
-
-      const customer = normalizeUs10(String(req.params.customer));
-      if (!/^\d{10}$/.test(String(customer))) {
-        return res.status(400).json({ error: 'Customer number must be 10-digit US number' });
-      }
-
-      const data: any = await bandwidth.sendMessage({
-        from: toE164Us10(business),
-        to: toE164Us10(customer),
-        text: parsed.data.text
-      });
-
-      const sMessageId = data?.id;
-      if (sMessageId) {
-        await repo.insertMessage({
-          sMessageId,
-          bInbound: false,
-          iBusinessNumber: business,
-          iCustomerNumber: customer,
-          text: parsed.data.text,
-          dtCreated: toMysqlDateTime3(),
-          eMessageEventTypeID: 2
-        });
-      }
-
-      return res.json({ ok: true, provider: data });
-    } catch (error: any) {
-      const business = getBusinessNumberFromSession(req);
-      const customer = normalizeUs10(String(req.params.customer));
-      const details = error?.response?.data ?? error?.message;
-      if (business && customer) {
-        await repo.insertMessage({
-          sMessageId: `local-failed-${Date.now()}`,
-          bInbound: false,
-          iBusinessNumber: business,
-          iCustomerNumber: customer,
-          text: parsed.data.text,
-          dtCreated: toMysqlDateTime3(),
-          eMessageEventTypeID: 8
-        });
-      }
-      return res.status(200).json({
-        ok: false,
-        error: 'Provider send failed',
-        details
-      });
+      const result = await proxyEchoService(config, req, `/api/conversations/${encodeURIComponent(req.params.customer)}/send`, 'POST', { text: req.body?.text ?? '' });
+      return res.status(result.status).json(result.data);
+    } catch (error) {
+      next(error);
     }
   });
-
-  app.post('/callbacks/inbound/messaging', async (req, res) => {
-    if (!Array.isArray(req.body)) {
-      return res.status(400).json({ error: 'Payload must be an array' });
-    }
-
-    let stored = 0;
-    let duplicates = 0;
-    let invalid = 0;
-    let lostEvents = 0;
-    let errors = 0;
-
-    for (const raw of req.body as EventPayload[]) {
-      try {
-        const sMessageId = raw?.message?.id;
-        const eventType = raw?.type;
-
-        if (!sMessageId || !eventType) {
-          invalid += 1;
-          await storage.saveError(raw);
-          errors += 1;
-          continue;
-        }
-
-        const eventTypeId = resolveEventTypeId(eventType);
-        if (!eventTypeId) {
-          invalid += 1;
-          await storage.saveError(raw);
-          errors += 1;
-          continue;
-        }
-
-        if (eventType === 'message-received') {
-          await repo.insertMessage({
-            sMessageId,
-            bInbound: true,
-            iBusinessNumber: normalizeUs10(raw.message?.to ?? raw.to),
-            iCustomerNumber: normalizeUs10(raw.message?.from),
-            text: raw.message?.text ?? null,
-            dtCreated: toMysqlDateTime3(raw.message?.time ?? raw.time),
-            eMessageEventTypeID: eventTypeId
-          });
-          const result = await storage.saveIfNew(sMessageId, raw);
-          if (result === 'stored') stored += 1;
-          else duplicates += 1;
-          continue;
-        }
-
-        const updated = await repo.setMessageEventByExternalMessageId({
-          sMessageId,
-          eMessageEventTypeID: eventTypeId,
-          dtEvent: toMysqlDateTime3(raw.time ?? raw.message?.time),
-          iErrorCode: raw.errorCode ?? null,
-          description: raw.description ?? null
-        });
-
-        if (!updated) {
-          await storage.saveLostEvent(sMessageId, raw);
-          lostEvents += 1;
-        }
-      } catch (error) {
-        logger.error({ error, payload: raw }, 'Failed processing inbound event');
-        await storage.saveError(raw);
-        errors += 1;
-      }
-    }
-
-    return res.json({ stored, duplicates, invalid, lostEvents, errors });
-  });
-
-  const openapi = YAML.load(`${process.cwd()}/openapi.yaml`);
-  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openapi));
 
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     logger.error(err);
