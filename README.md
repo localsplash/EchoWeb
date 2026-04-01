@@ -1,4 +1,4 @@
-# EchoMessagingService
+# EchoWeb
 
 TypeScript/Express proof-of-concept for Bandwidth SMS send/receive.
 
@@ -6,6 +6,7 @@ TypeScript/Express proof-of-concept for Bandwidth SMS send/receive.
 - `GET /` (basic sendMessage UI)
 - `GET /healthz`
 - `POST /callbacks/inbound/messaging`
+- External EchoService base URL: `https://io.echo.wisp.net`
 - `GET /message/list`
 - `GET /message/open?id=<messageId>`
 - `POST /sendMessage`
