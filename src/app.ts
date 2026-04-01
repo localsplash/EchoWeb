@@ -43,6 +43,10 @@ const appPageHtml = `<!doctype html>
 .threadHead input{flex:1;padding:10px;border:1px solid #ccc;border-radius:8px}
 .threadHead .title{font-weight:700;flex:1}
 .threadHead button{border:0;background:#f1f2f5;border-radius:8px;padding:8px 10px;cursor:pointer}
+#threadMenuDropdown{position:absolute;background:#fff;border:1px solid #ddd;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);z-index:100;min-width:150px;overflow:hidden}
+#threadMenuDropdown button{display:block;width:100%;padding:10px 16px;text-align:left;background:none;border:0;border-radius:0;cursor:pointer;font-size:14px}
+#threadMenuDropdown button:hover{background:#f5f7fb}
+#threadMenuDropdown button.danger{color:#c00}
 .msgs{flex:1;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:10px;min-height:0}
 .msg{max-width:78%;padding:10px 12px;border-radius:12px;word-break:break-word}
 .in{background:#fff;border:1px solid #e4e4e4;align-self:flex-start}
@@ -55,7 +59,7 @@ const appPageHtml = `<!doctype html>
 @media (max-width: 820px){ .wrap{grid-template-columns:40% 60%} .msg{max-width:88%} }
 </style></head>
 <body><div class="wrap"><aside class="side"><div class="head"><span>Conversations</span><div><button onclick="startNew()">+ New</button> <button onclick="logout()">Logout</button></div></div><div id="conversations" class="list"></div></aside>
-<main class="main"><div class="threadHead"><div id="threadTitle" class="title">Select a conversation</div><input id="customerInput" style="display:none" inputmode="numeric" maxlength="11" placeholder="10-digit customer number"/><button id="threadMenu" style="display:none" onclick="threadMenu()">⋮</button></div><div id="messages" class="msgs"><div class="empty">Select a conversation</div></div>
+<main class="main"><div class="threadHead"><div id="threadTitle" class="title">Select a conversation</div><input id="customerInput" style="display:none" inputmode="numeric" maxlength="11" placeholder="10-digit customer number"/><div style="position:relative"><button id="threadMenu" style="display:none" onclick="toggleThreadMenu(event)">⋮</button><div id="threadMenuDropdown" style="display:none"><button onclick="threadMenuAction('unread')">Mark unread</button><button class="danger" onclick="threadMenuAction('delete')">Delete</button></div></div></div><div id="messages" class="msgs"><div class="empty">Select a conversation</div></div>
 <form id="compose" class="compose" style="display:none"><input id="text" placeholder="Type a message..." maxlength="2048"/><button type="submit">Send</button></form></main></div>
 <script>
 let currentCustomer = null; let draftingNew=false;
@@ -80,12 +84,18 @@ async function loadConversations(){
     root.appendChild(el);
   }
 }
-async function threadMenu(){
+function toggleThreadMenu(e){
+  e.stopPropagation();
+  const dd=document.getElementById('threadMenuDropdown');
+  dd.style.display=dd.style.display==='none'?'block':'none';
+}
+async function threadMenuAction(action){
+  document.getElementById('threadMenuDropdown').style.display='none';
   if(!currentCustomer) return;
-  const action=prompt('Type: unread or delete');
   if(action==='unread'){ await fetch('/api/conversations/'+currentCustomer+'/mark-unread',{method:'POST'}); await loadConversations(); }
   if(action==='delete' && confirm('Delete entire conversation?')){ await fetch('/api/conversations/'+currentCustomer,{method:'DELETE'}); currentCustomer=null; draftingNew=false; document.getElementById('messages').innerHTML='<div class="empty">Select a conversation</div>'; document.getElementById('compose').style.display='none'; setThreadHeader(); await loadConversations(); }
 }
+document.addEventListener('click',()=>{ const dd=document.getElementById('threadMenuDropdown'); if(dd) dd.style.display='none'; });
 async function openConversation(customer, skipRead){
   draftingNew=false; currentCustomer=String(customer); setThreadHeader();
   const r=await fetch('/api/conversations/'+customer+'/messages'); const data=await r.json();
