@@ -1,4 +1,6 @@
 import express from 'express';
+import http from 'http';
+import https from 'https';
 import path from 'path';
 import pinoHttp from 'pino-http';
 import pino from 'pino';
@@ -129,12 +131,42 @@ export function buildApp() {
     }
   });
 
-  app.post('/api/conversations/:customer/send', async (req, res, next) => {
-    try {
-      const result = await proxyEchoService(config, req, `/api/conversations/${encodeURIComponent(req.params.customer)}/send`, 'POST', { text: req.body?.text ?? '' });
-      return res.status(result.status).json(result.data);
-    } catch (error) {
-      next(error);
+  app.post('/api/conversations/:customer/send', (req, res, next) => {
+    const business = getBusinessNumberFromSession(req);
+    if (!business) return res.status(401).json({ error: 'Not logged in' });
+
+    const contentType = req.headers['content-type'] || '';
+
+    if (contentType.includes('multipart/form-data')) {
+      // Pipe multipart request directly to EchoService (preserves files)
+      const targetUrl = new URL(
+        `/api/conversations/${encodeURIComponent(req.params.customer)}/send`,
+        config.ECHO_SERVICE_BASE_URL
+      );
+      targetUrl.searchParams.set('businessNumber', String(business));
+
+      const transport = targetUrl.protocol === 'https:' ? https : http;
+      const proxyReq = transport.request(targetUrl, {
+        method: 'POST',
+        headers: {
+          ...req.headers,
+          host: targetUrl.host
+        }
+      }, (proxyRes) => {
+        res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
+        proxyRes.pipe(res);
+      });
+
+      proxyReq.on('error', (err) => {
+        next(err);
+      });
+
+      req.pipe(proxyReq);
+    } else {
+      // JSON send (existing behavior)
+      proxyEchoService(config, req, `/api/conversations/${encodeURIComponent(req.params.customer)}/send`, 'POST', { text: req.body?.text ?? '' })
+        .then(result => res.status(result.status).json(result.data))
+        .catch(next);
     }
   });
 

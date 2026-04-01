@@ -93,8 +93,19 @@
         </div>
       </div>
 
+      <!-- Attachment Previews -->
+      <div id="attachments" class="hidden flex-wrap gap-2 px-4 pt-3 border-t border-slate-100 bg-white"></div>
+
       <!-- Compose Bar -->
-      <form id="compose" class="hidden items-end gap-3 px-4 py-3 border-t border-slate-200 bg-white" style="padding-bottom: calc(0.75rem + env(safe-area-inset-bottom))">
+      <form id="compose" class="hidden items-end gap-3 px-4 py-3 bg-white" style="padding-bottom: calc(0.75rem + env(safe-area-inset-bottom))">
+        <!-- Paperclip / attach button -->
+        <button type="button" id="btnAttach" class="flex-shrink-0 w-10 h-10 rounded-full hover:bg-slate-100 flex items-center justify-center transition-colors" title="Attach files">
+          <svg class="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13"/>
+          </svg>
+        </button>
+        <input type="file" id="fileInput" multiple hidden
+          accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.zip,.rar" />
         <textarea id="text" rows="1" placeholder="Type a message..." maxlength="2048"
           class="flex-1 resize-none rounded-2xl border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 px-4 py-2.5 text-sm leading-relaxed max-h-32 overflow-y-auto outline-none transition-all"></textarea>
         <button type="submit" class="flex-shrink-0 w-10 h-10 rounded-full bg-blue-600 hover:bg-blue-700 active:bg-blue-800 flex items-center justify-center transition-colors">
