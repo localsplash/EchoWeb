@@ -1,7 +1,7 @@
 {
   "name": "echoweb",
   "version": "0.1.0",
-  "description": "Bandwidth SMS POC service",
+  "description": "Echo web frontend",
   "main": "dist/server.js",
   "scripts": {
     "test": "vitest run",
