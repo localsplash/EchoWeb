@@ -5,8 +5,8 @@ TypeScript/Express proof-of-concept for Bandwidth SMS send/receive.
 ## Endpoints
 - `GET /` (basic sendMessage UI)
 - `GET /healthz`
-- `POST /callbacks/inbound/messaging`
 - External EchoService base URL: `https://io.echo.wisp.net`
+- Bandwidth webhooks should target `/webhooks/bandwidth/inbound` and `/webhooks/bandwidth/status`
 - `GET /message/list`
 - `GET /message/open?id=<messageId>`
 - `POST /sendMessage`
