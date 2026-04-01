@@ -6,10 +6,18 @@ function sanitizeId(id: string): string {
 }
 
 export class InboundStorage {
-  constructor(private readonly dir: string) {}
+  private readonly lostEventDir: string;
+  private readonly errorDir: string;
+
+  constructor(private readonly dir: string) {
+    this.lostEventDir = path.join(this.dir, 'lostEvent');
+    this.errorDir = path.join(this.dir, 'error');
+  }
 
   async init(): Promise<void> {
     await fs.mkdir(this.dir, { recursive: true });
+    await fs.mkdir(this.lostEventDir, { recursive: true });
+    await fs.mkdir(this.errorDir, { recursive: true });
   }
 
   filePathForId(id: string): string {
@@ -45,5 +53,15 @@ export class InboundStorage {
     const file = this.filePathForId(id);
     const raw = await fs.readFile(file, 'utf8');
     return JSON.parse(raw);
+  }
+
+  async saveLostEvent(id: string, payload: unknown): Promise<void> {
+    const file = path.join(this.lostEventDir, `${Date.now()}_${sanitizeId(id)}.json`);
+    await fs.writeFile(file, JSON.stringify(payload, null, 2), 'utf8');
+  }
+
+  async saveError(payload: unknown): Promise<void> {
+    const file = path.join(this.errorDir, `${Date.now()}_error.json`);
+    await fs.writeFile(file, JSON.stringify(payload, null, 2), 'utf8');
   }
 }

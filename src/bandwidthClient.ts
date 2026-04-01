@@ -1,11 +1,15 @@
 import axios from 'axios';
 import type { AppConfig } from './config';
-import type { SendMessageInput } from './schemas';
+type ProviderSendInput = {
+  from: string;
+  to: string;
+  text: string;
+};
 
 export class BandwidthClient {
   constructor(private readonly config: AppConfig) {}
 
-  async sendMessage(input: SendMessageInput): Promise<unknown> {
+  async sendMessage(input: ProviderSendInput): Promise<unknown> {
     const url = `${this.config.BANDWIDTH_MESSAGING_API_BASE_URL}/users/${this.config.BANDWIDTH_ACCOUNT_ID}/messages`;
     const response = await axios.post(
       url,

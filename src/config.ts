@@ -10,7 +10,12 @@ const envSchema = z.object({
   BANDWIDTH_MESSAGING_API_BASE_URL: z.string().url().default('https://messaging.bandwidth.com/api/v2'),
   INBOUND_STORAGE_DIR: z.string().default('./inbound'),
   PUBLIC_BASE_URL: z.string().default('http://localhost:3000'),
-  LOG_LEVEL: z.string().default('info')
+  LOG_LEVEL: z.string().default('info'),
+  DB_HOST: z.string().default('echo-database'),
+  DB_PORT: z.coerce.number().default(3306),
+  DB_USER: z.string().default('echo_app'),
+  DB_PASSWORD: z.string().min(1),
+  DB_NAME: z.string().default('echo_db')
 });
 
 export type AppConfig = z.infer<typeof envSchema>;
