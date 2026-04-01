@@ -14,10 +14,10 @@ services:
       - echo_database_data:/var/lib/mysql
     restart: unless-stopped
 
-  echo-messaging-service:
-    image: echo-messaging-service:latest
+  echo-web:
+    image: echo-web:latest
     build: .
-    container_name: echo-messaging-service
+    container_name: echo-web
     env_file:
       - .env
     environment:

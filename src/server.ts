@@ -5,5 +5,5 @@ const config = loadConfig();
 const app = buildApp();
 
 app.listen(config.PORT, () => {
-  console.log(`EchoMessagingService listening on :${config.PORT}`);
+  console.log(`EchoWeb listening on :${config.PORT}`);
 });

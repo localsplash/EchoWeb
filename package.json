@@ -1,5 +1,5 @@
 {
-  "name": "echomessagingservice",
+  "name": "echoweb",
   "version": "0.1.0",
   "description": "Bandwidth SMS POC service",
   "main": "dist/server.js",

@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: EchoMessagingService API
+  title: EchoWeb API
   version: 0.1.0
 servers:
   - url: /
