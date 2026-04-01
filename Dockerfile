@@ -12,6 +12,7 @@ COPY --from=build /app/package*.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/openapi.yaml ./openapi.yaml
+COPY public ./public
 RUN addgroup -S app && adduser -S app -G app
 RUN mkdir -p /app/inbound && chown -R app:app /app
 USER app
