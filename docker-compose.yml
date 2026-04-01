@@ -1,19 +1,4 @@
 services:
-  echo-database:
-    image: mysql:8.4
-    container_name: echo-database
-    env_file:
-      - .env
-    environment:
-      - TZ=America/Los_Angeles
-      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
-      - MYSQL_DATABASE=${DB_NAME}
-      - MYSQL_USER=${DB_USER}
-      - MYSQL_PASSWORD=${DB_PASSWORD}
-    volumes:
-      - echo_database_data:/var/lib/mysql
-    restart: unless-stopped
-
   echo-web:
     image: echo-web:latest
     build: .
@@ -24,11 +9,6 @@ services:
       - TZ=America/Los_Angeles
     expose:
       - "3160"
-    depends_on:
-      - echo-database
     volumes:
       - ./inbound:/app/inbound
     restart: unless-stopped
-
-volumes:
-  echo_database_data:
