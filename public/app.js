@@ -174,7 +174,17 @@ function startNew() {
 
 async function loadConversations() {
   const r = await fetch('/api/conversations');
-  if (!r.ok) { location.href = '/'; return; }
+  if (r.status === 401) {
+    const root = document.getElementById('conversations');
+    if (root) root.innerHTML = '<div class="p-6 text-sm text-slate-500">Please enter your business number to continue.</div>';
+    const compose = document.getElementById('compose');
+    if (compose) compose.style.display = 'none';
+    draftingNew = false;
+    currentCustomer = null;
+    setThreadHeader();
+    return;
+  }
+  if (!r.ok) { console.error('Failed to load conversations', r.status); return; }
   const data = await r.json();
   const root = document.getElementById('conversations');
   root.innerHTML = '';
