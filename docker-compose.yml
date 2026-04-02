@@ -1,14 +1,12 @@
+# Standalone dev — for full stack use EchoOrchestrator instead.
 services:
   echo-web:
-    image: echo-web:latest
     build: .
     container_name: echo-web
-    env_file:
-      - .env
     environment:
-      - TZ=America/Los_Angeles
-    expose:
-      - "3160"
-    volumes:
-      - ./inbound:/app/inbound
+      PORT: "3160"
+      ECHO_SERVICE_BASE_URL: ${ECHO_SERVICE_BASE_URL:-http://host.docker.internal:18080}
+      MEDIA_BASE_URL: ${MEDIA_BASE_URL:-http://localhost:18082}
+    ports:
+      - "127.0.0.1:3160:3160"
     restart: unless-stopped

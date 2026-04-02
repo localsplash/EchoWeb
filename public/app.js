@@ -1,6 +1,6 @@
 /* ── Echo Messages – client JS ── */
 
-const MEDIA_BASE_URL = 'https://media.echo.wisp.net';
+const MEDIA_BASE_URL = (window.ECHO_CONFIG && window.ECHO_CONFIG.MEDIA_BASE_URL) || 'https://media.echo.wisp.net';
 const MAX_FILE_SIZE = 3.5 * 1024 * 1024; // 3.5 MB
 const MAX_FILES = 10;
 

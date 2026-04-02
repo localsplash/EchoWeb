@@ -69,6 +69,15 @@ export function buildApp() {
   app.use(pinoHttp({ logger }));
   app.use(express.static(publicDir, { index: false }));
 
+  // Serve browser-facing config (MEDIA_BASE_URL, etc.) as a cacheable JS snippet.
+  // Loaded by index.html before app.js via <script src="/config.js">.
+  const configJs = `window.ECHO_CONFIG=${JSON.stringify({ MEDIA_BASE_URL: config.MEDIA_BASE_URL })};`;
+  app.get('/config.js', (_req, res) => {
+    res.set('Content-Type', 'application/javascript');
+    res.set('Cache-Control', 'public, max-age=300');
+    res.send(configJs);
+  });
+
   app.get('/healthz', (_req, res) => {
     res.json({ ok: true, service: 'EchoWeb' });
   });

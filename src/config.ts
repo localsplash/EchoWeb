@@ -4,6 +4,7 @@ const envSchema = z.object({
   NODE_ENV: z.string().default('development'),
   PORT: z.coerce.number().default(3000),
   ECHO_SERVICE_BASE_URL: z.string().url().default('https://io.echo.wisp.net'),
+  MEDIA_BASE_URL: z.string().default('https://media.echo.wisp.net'),
   LOG_LEVEL: z.string().default('info')
 });
 
