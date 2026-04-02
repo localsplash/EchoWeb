@@ -37,13 +37,31 @@
       maxlength="10"
       minlength="10"
       required
-      placeholder="7145551234"
+      placeholder="(714) 555-1234"
       class="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all text-center font-bold placeholder:text-[#D1D5DB]"
-      style="font-size:2.2rem; letter-spacing:0.12em; line-height:1.05;"
+      style="font-size:2.2rem; letter-spacing:0.02em; line-height:1.05;"
+      oninput="formatBusinessNumber(this)"
     />
     <button type="submit" class="w-full mt-4 py-3 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold rounded-xl transition-colors">
       Continue
     </button>
   </form>
+  <script>
+    function formatBusinessNumber(el) {
+      const digits = String(el.value || '').replace(/\D/g, '').slice(0, 10);
+      if (digits.length <= 3) {
+        el.value = digits;
+      } else if (digits.length <= 6) {
+        el.value = `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+      } else {
+        el.value = `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+      }
+    }
+
+    document.querySelector('form').addEventListener('submit', function () {
+      const input = document.querySelector('input[name="businessNumber"]');
+      input.value = String(input.value || '').replace(/\D/g, '').slice(0, 10);
+    });
+  </script>
 </body>
 </html>
