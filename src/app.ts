@@ -188,6 +188,12 @@ export function buildApp() {
 
   // ── Settings page ──────────────────────────────────────────────────────────
 
+  app.get('/api/me', (req, res) => {
+    const business = getBusinessNumberFromSession(req);
+    if (!business) return res.status(401).json({ error: 'Not logged in' });
+    return res.json({ iBusinessNumber: business });
+  });
+
   app.get('/settings', (req, res) => {
     const business = getBusinessNumberFromSession(req);
     if (!business) return res.redirect('/');

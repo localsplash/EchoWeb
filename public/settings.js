@@ -1,5 +1,14 @@
 /* ── Echo Settings ── */
 
+// Carrier list mirrors sms_lkp_Carrier seed data (bitwise eCarrierId values).
+// Hardcoded here so the form works without a round-trip to the API.
+const CARRIERS = [
+  { eCarrierId: 1, carrier: 'Bandwidth' },
+  { eCarrierId: 2, carrier: 'Twilio'    },
+  { eCarrierId: 4, carrier: 'Sinch'     },
+  { eCarrierId: 8, carrier: 'Tychron'   },
+];
+
 // Structured field definitions for known carriers (keyed by eCarrierId).
 // Carriers not listed here fall back to a raw JSON textarea.
 const CARRIER_FIELDS = {
@@ -42,15 +51,12 @@ function formatPhoneNumber(num) {
 /* ── Data loading ── */
 
 async function loadAll() {
-  await Promise.all([loadCarriers(), loadCarrierApps(), loadBusinessPhone()]);
+  populateCarrierDropdown();
+  await Promise.all([loadCarrierApps(), loadBusinessPhone()]);
 }
 
-async function loadCarriers() {
-  const r = await fetch('/api/carriers');
-  if (!r.ok) return;
-  const data = await r.json();
-  carriers = data.items || [];
-  // Populate the form carrier dropdown
+function populateCarrierDropdown() {
+  carriers = CARRIERS;
   const sel = document.getElementById('formCarrier');
   sel.innerHTML = '<option value="">— select carrier —</option>';
   for (const c of carriers) {
@@ -71,28 +77,31 @@ async function loadCarrierApps() {
 }
 
 async function loadBusinessPhone() {
-  const r = await fetch('/api/business-phones');
-  if (!r.ok) return;
-  const data = await r.json();
-  currentPhone = data.item || null;
+  // Always resolve the session number server-side (/api/me reads the HttpOnly cookie).
+  const meRes = await fetch('/api/me');
+  const meData = meRes.ok ? await meRes.json() : null;
+  const sessionNumber = meData?.iBusinessNumber ?? null;
 
   const numEl  = document.getElementById('phoneNumberDisplay');
   const nameEl = document.getElementById('inputDisplayName');
   const selEl  = document.getElementById('selectCarrierApp');
 
+  // Show the phone number from session immediately, even before DB record exists.
+  numEl.textContent = sessionNumber ? formatPhoneNumber(sessionNumber) : '—';
+
+  // Fetch the full business phone record (may not exist yet for new numbers).
+  const r = await fetch('/api/business-phones');
+  if (!r.ok) return;
+  const data = await r.json();
+  currentPhone = data.item || null;
+
   if (currentPhone) {
-    numEl.textContent = formatPhoneNumber(currentPhone.iBusinessNumber);
     nameEl.value = currentPhone.displayName || '';
     selEl.value  = currentPhone.iCarrierApplicationId || '';
-  } else {
-    numEl.textContent = formatPhoneNumber(
-      document.cookie.match(/businessNumber=(\d+)/)?.[1] || ''
-    );
-  }
 
-  // Update page / tab title from displayName
-  if (currentPhone?.displayName) {
-    document.getElementById('pageTitle').textContent = currentPhone.displayName + ' — Settings';
+    if (currentPhone.displayName) {
+      document.getElementById('pageTitle').textContent = currentPhone.displayName + ' — Settings';
+    }
   }
 }
 
