@@ -51,7 +51,7 @@ export function buildApp() {
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: false }));
   app.use(pinoHttp({ logger }));
-  app.use(express.static(publicDir));
+  app.use(express.static(publicDir, { index: false }));
 
   app.get('/healthz', (_req, res) => {
     res.json({ ok: true, service: 'EchoWeb' });
