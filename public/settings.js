@@ -68,8 +68,12 @@ function populateCarrierDropdown() {
 }
 
 async function loadCarrierApps() {
+  const container = document.getElementById('appList');
   const r = await fetch('/api/carrier-applications');
-  if (!r.ok) return;
+  if (!r.ok) {
+    container.innerHTML = '<div class="px-6 py-8 text-center text-sm text-red-400">Could not load carrier applications. Check that EchoService is reachable and the database migration has been applied.</div>';
+    return;
+  }
   const data = await r.json();
   carrierApps = data.items || [];
   renderAppList();
