@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Echo Messages</title>
+  <title>Q-Derm Messages</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -17,6 +17,19 @@
       }
     }
   </script>
+  <style>
+    #conversations::-webkit-scrollbar,
+    #messages::-webkit-scrollbar { width: 4px; }
+    #conversations::-webkit-scrollbar-track,
+    #messages::-webkit-scrollbar-track { background: transparent; }
+    #conversations::-webkit-scrollbar-thumb,
+    #messages::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+    @keyframes msgIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .msg-anim { animation: msgIn 0.18s ease-out both; }
+  </style>
 </head>
 <body class="bg-slate-50 font-sans overflow-hidden">
   <div id="app" class="flex h-dvh" data-panel="list">
@@ -25,8 +38,15 @@
     <aside id="sidebar" class="flex flex-col w-full md:w-80 md:min-w-[20rem] md:max-w-xs bg-white border-r border-slate-200 md:flex">
 
       <!-- Sidebar Header -->
-      <div class="flex items-center justify-between px-4 py-3 border-b border-slate-100">
-        <h1 class="text-lg font-bold text-slate-800">Messages</h1>
+      <div class="flex items-center justify-between px-4 py-3.5 border-b border-slate-100">
+        <div class="flex items-center gap-2.5">
+          <div class="w-7 h-7 rounded-lg bg-blue-600 flex items-center justify-center flex-shrink-0">
+            <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+            </svg>
+          </div>
+          <h1 class="text-sm font-bold text-slate-900 tracking-tight">Q-Dermatology</h1>
+        </div>
         <div class="flex gap-2">
           <button onclick="startNew()" class="p-2 rounded-lg hover:bg-slate-100 transition-colors" title="New conversation">
             <svg class="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -47,10 +67,10 @@
     </aside>
 
     <!-- THREAD PANEL -->
-    <main id="thread" class="hidden md:flex flex-col flex-1 min-w-0 bg-slate-50">
+    <main id="thread" class="hidden md:flex flex-col flex-1 min-w-0 bg-[#f4f6fb]">
 
       <!-- Thread Header -->
-      <div class="flex items-center gap-3 px-4 py-3 border-b border-slate-200 bg-white">
+      <div class="flex items-center gap-3 px-4 py-3 border-b border-slate-200 bg-white shadow-sm">
         <!-- Back button (mobile) -->
         <button id="btnBack" onclick="showPanel('list')" class="md:hidden -ml-1 p-2 rounded-lg hover:bg-slate-100 transition-colors">
           <svg class="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -85,11 +105,14 @@
 
       <!-- Messages Area -->
       <div id="messages" class="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3 min-h-0">
-        <div id="emptyState" class="m-auto text-center py-12">
-          <svg class="w-16 h-16 mx-auto text-slate-300 mb-4" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
-          </svg>
-          <p class="text-slate-400 text-sm">Select a conversation to start messaging</p>
+        <div id="emptyState" class="m-auto text-center px-8">
+          <div class="w-16 h-16 rounded-2xl bg-blue-50 flex items-center justify-center mx-auto mb-4">
+            <svg class="w-8 h-8 text-blue-300" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+            </svg>
+          </div>
+          <p class="text-slate-500 text-sm font-medium">No conversation selected</p>
+          <p class="text-slate-400 text-xs mt-1">Choose a patient from the list or start a new message</p>
         </div>
       </div>
 
@@ -97,7 +120,7 @@
       <div id="attachments" class="hidden flex-wrap gap-2 px-4 pt-3 border-t border-slate-100 bg-white"></div>
 
       <!-- Compose Bar -->
-      <form id="compose" class="hidden items-end gap-3 px-4 py-3 bg-white" style="padding-bottom: calc(0.75rem + env(safe-area-inset-bottom))">
+      <form id="compose" class="hidden items-end gap-3 px-4 py-3 bg-white shadow-[0_-1px_6px_rgba(0,0,0,0.06)]" style="padding-bottom: calc(0.75rem + env(safe-area-inset-bottom))">
         <!-- Paperclip / attach button -->
         <button type="button" id="btnAttach" class="flex-shrink-0 w-10 h-10 rounded-full hover:bg-slate-100 flex items-center justify-center transition-colors" title="Attach files">
           <svg class="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">

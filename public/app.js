@@ -44,6 +44,22 @@ function getInitials(num) {
   return d.slice(0, 2);
 }
 
+function getAvatarColor(num) {
+  const palettes = [
+    ['bg-violet-100', 'text-violet-700'],
+    ['bg-emerald-100', 'text-emerald-700'],
+    ['bg-amber-100', 'text-amber-700'],
+    ['bg-rose-100', 'text-rose-700'],
+    ['bg-cyan-100', 'text-cyan-700'],
+    ['bg-indigo-100', 'text-indigo-700'],
+    ['bg-orange-100', 'text-orange-700'],
+    ['bg-teal-100', 'text-teal-700'],
+  ];
+  const d = String(num).replace(/\D/g, '');
+  const hash = d.split('').reduce((a, c) => ((a << 5) - a + Number(c)) | 0, 0);
+  return palettes[Math.abs(hash) % palettes.length];
+}
+
 function iconForEvent(e) {
   if (Number(e) === 1) return '\u{1F4E9}';
   if (Number(e) === 2) return '\u{1F553}';
@@ -137,8 +153,8 @@ function setThreadHeader() {
     input.classList.remove('flex');
     menu.classList.remove('hidden');
     menu.classList.add('inline-flex');
-    avatar.classList.remove('hidden');
-    avatar.classList.add('flex');
+    const [avBg, avText] = getAvatarColor(currentCustomer);
+    avatar.className = `w-9 h-9 rounded-full ${avBg} ${avText} font-semibold text-sm flex items-center justify-center flex-shrink-0`;
     avatar.textContent = getInitials(currentCustomer);
   } else {
     title.classList.remove('hidden');
@@ -195,12 +211,13 @@ async function loadConversations() {
 
     const el = document.createElement('div');
     el.className = 'flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-slate-50 active:bg-slate-100 transition-colors'
-      + (isActive ? ' bg-blue-50' : '');
+      + (isActive ? ' bg-blue-50 shadow-[inset_3px_0_0_#3b82f6]' : '');
     el.onclick = () => openConversation(c.iCustomerNumber);
 
+    const [avatarBg, avatarText] = getAvatarColor(c.iCustomerNumber);
     const avatarDiv = document.createElement('div');
     avatarDiv.className = 'w-11 h-11 rounded-full flex items-center justify-center text-sm font-semibold flex-shrink-0'
-      + (isUnread ? ' bg-blue-600 text-white' : ' bg-blue-100 text-blue-700');
+      + (isUnread ? ' bg-blue-600 text-white' : (' ' + avatarBg + ' ' + avatarText));
     avatarDiv.textContent = getInitials(c.iCustomerNumber);
 
     const content = document.createElement('div');
@@ -260,7 +277,7 @@ async function threadMenuAction(action) {
     await fetch('/api/conversations/' + currentCustomer, { method: 'DELETE' });
     currentCustomer = null;
     draftingNew = false;
-    document.getElementById('messages').innerHTML = '<div id="emptyState" class="m-auto text-center py-12"><svg class="w-16 h-16 mx-auto text-slate-300 mb-4" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg><p class="text-slate-400 text-sm">Select a conversation to start messaging</p></div>';
+    document.getElementById('messages').innerHTML = '<div id="emptyState" class="m-auto text-center px-8"><div class="w-16 h-16 rounded-2xl bg-blue-50 flex items-center justify-center mx-auto mb-4"><svg class="w-8 h-8 text-blue-300" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg></div><p class="text-slate-500 text-sm font-medium">No conversation selected</p><p class="text-slate-400 text-xs mt-1">Choose a patient from the list or start a new message</p></div>';
     document.getElementById('compose').style.display = 'none';
     setThreadHeader();
     await loadConversations();
@@ -364,13 +381,13 @@ async function openConversation(customer, skipRead) {
   for (const m of data.items) {
     const isInbound = Number(m.bInbound) === 1;
     const wrapper = document.createElement('div');
-    wrapper.className = 'flex flex-col max-w-[75%] md:max-w-[65%]'
+    wrapper.className = 'flex flex-col max-w-[75%] md:max-w-[65%] msg-anim'
       + (isInbound ? ' items-start self-start' : ' items-end self-end');
 
     const bubble = document.createElement('div');
     bubble.className = isInbound
-      ? 'bg-white border border-slate-200 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm text-slate-800 shadow-sm'
-      : 'bg-blue-600 text-white rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm shadow-sm';
+      ? 'bg-white border border-slate-100 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm text-slate-800 shadow-sm'
+      : 'bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm shadow-sm';
 
     // Message text
     if (m.text) {
