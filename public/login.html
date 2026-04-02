@@ -33,13 +33,13 @@
     <input
       name="businessNumber"
       inputmode="numeric"
-      pattern="\d{10}"
+      pattern="\(\d{3}\) \d{3}-\d{4}"
       maxlength="14"
-      minlength="10"
+      minlength="14"
       required
       placeholder="(714) 555-1234"
       class="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all text-center font-bold placeholder:text-[#D1D5DB]"
-      style="font-size:2.2rem; letter-spacing:0.02em; line-height:1.05;"
+      style="font-size:2.2rem; letter-spacing:0; line-height:1.05;"
       oninput="formatBusinessNumber(this)"
     />
     <button type="submit" class="w-full mt-4 py-3 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold rounded-xl transition-colors">
