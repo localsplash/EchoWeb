@@ -610,7 +610,25 @@ document.getElementById('text').addEventListener('keydown', function (e) {
   }
 });
 
+/* ── Business phone identity ── */
+
+async function loadBusinessIdentity() {
+  try {
+    const r = await fetch('/api/business-phones');
+    if (!r.ok) return;
+    const data = await r.json();
+    const name = data?.item?.displayName;
+    if (name) {
+      const nameEl = document.getElementById('businessName');
+      const titleEl = document.getElementById('pageTitle');
+      if (nameEl) nameEl.textContent = name;
+      if (titleEl) titleEl.textContent = name + ' Messages';
+    }
+  } catch (_) { /* non-fatal */ }
+}
+
 /* ── Init ── */
 
 setThreadHeader();
 loadConversations();
+loadBusinessIdentity();

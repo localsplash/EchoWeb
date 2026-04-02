@@ -6,7 +6,7 @@ import pinoHttp from 'pino-http';
 import pino from 'pino';
 import { loadConfig } from './config';
 
-type ApiMethod = 'GET' | 'POST' | 'DELETE';
+type ApiMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
 function parseCookie(req: express.Request, key: string): string | null {
   const raw = req.headers.cookie;
@@ -25,6 +25,22 @@ function getBusinessNumberFromSession(req: express.Request): number | null {
 }
 
 const publicDir = path.join(__dirname, '..', 'public');
+
+// Proxy that does NOT inject businessNumber — used for settings endpoints.
+// Still requires a valid session so unauthenticated requests are rejected.
+async function proxyDirect(config: ReturnType<typeof loadConfig>, req: express.Request, targetPath: string, method: ApiMethod, body?: unknown) {
+  const business = getBusinessNumberFromSession(req);
+  if (!business) return { status: 401, data: { error: 'Not logged in' } };
+
+  const url = new URL(targetPath, config.ECHO_SERVICE_BASE_URL);
+  const response = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: method === 'GET' ? undefined : JSON.stringify(body ?? {})
+  });
+  const data = await response.json().catch(() => ({ error: 'Invalid response from EchoService' }));
+  return { status: response.status, data };
+}
 
 async function proxyEchoService(config: ReturnType<typeof loadConfig>, req: express.Request, path: string, method: ApiMethod, body?: unknown) {
   const business = getBusinessNumberFromSession(req);
@@ -168,6 +184,73 @@ export function buildApp() {
         .then(result => res.status(result.status).json(result.data))
         .catch(next);
     }
+  });
+
+  // ── Settings page ──────────────────────────────────────────────────────────
+
+  app.get('/settings', (req, res) => {
+    const business = getBusinessNumberFromSession(req);
+    if (!business) return res.redirect('/');
+    return res.sendFile(path.join(publicDir, 'settings.html'));
+  });
+
+  // ── Settings API proxies ───────────────────────────────────────────────────
+
+  app.get('/api/carriers', async (req, res, next) => {
+    try {
+      const result = await proxyDirect(config, req, '/api/carriers', 'GET');
+      return res.status(result.status).json(result.data);
+    } catch (error) { next(error); }
+  });
+
+  app.get('/api/carrier-applications', async (req, res, next) => {
+    try {
+      const result = await proxyDirect(config, req, '/api/carrier-applications', 'GET');
+      return res.status(result.status).json(result.data);
+    } catch (error) { next(error); }
+  });
+
+  app.get('/api/carrier-applications/:id', async (req, res, next) => {
+    try {
+      const result = await proxyDirect(config, req, `/api/carrier-applications/${encodeURIComponent(req.params.id)}`, 'GET');
+      return res.status(result.status).json(result.data);
+    } catch (error) { next(error); }
+  });
+
+  app.post('/api/carrier-applications', async (req, res, next) => {
+    try {
+      const result = await proxyDirect(config, req, '/api/carrier-applications', 'POST', req.body);
+      return res.status(result.status).json(result.data);
+    } catch (error) { next(error); }
+  });
+
+  app.put('/api/carrier-applications/:id', async (req, res, next) => {
+    try {
+      const result = await proxyDirect(config, req, `/api/carrier-applications/${encodeURIComponent(req.params.id)}`, 'PUT', req.body);
+      return res.status(result.status).json(result.data);
+    } catch (error) { next(error); }
+  });
+
+  // Business-phone routes always scope to the logged-in session number.
+  app.get('/api/business-phones', async (req, res, next) => {
+    try {
+      const business = getBusinessNumberFromSession(req);
+      if (!business) return res.status(401).json({ error: 'Not logged in' });
+      const result = await proxyDirect(config, req, `/api/business-phones/${business}`, 'GET');
+      return res.status(result.status).json(result.data);
+    } catch (error) { next(error); }
+  });
+
+  app.post('/api/business-phones', async (req, res, next) => {
+    try {
+      const business = getBusinessNumberFromSession(req);
+      if (!business) return res.status(401).json({ error: 'Not logged in' });
+      const result = await proxyDirect(config, req, '/api/business-phones', 'POST', {
+        ...req.body,
+        iBusinessNumber: business
+      });
+      return res.status(result.status).json(result.data);
+    } catch (error) { next(error); }
   });
 
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
