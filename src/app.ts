@@ -157,42 +157,66 @@ export function buildApp() {
   });
 
   app.post('/api/conversations/:customer/send', (req, res, next) => {
+    const body = {
+      text: req.body?.text ?? '',
+      draftMediaIds: Array.isArray(req.body?.draftMediaIds) ? req.body.draftMediaIds : []
+    };
+    proxyEchoService(config, req, `/api/conversations/${encodeURIComponent(req.params.customer)}/send`, 'POST', body)
+      .then(result => res.status(result.status).json(result.data))
+      .catch(next);
+  });
+
+  // ── Draft media (pre-upload of attachments before send) ─────────────────
+
+  app.post('/api/drafts/:customer/media', (req, res, next) => {
     const business = getBusinessNumberFromSession(req);
     if (!business) return res.status(401).json({ error: 'Not logged in' });
 
-    const contentType = req.headers['content-type'] || '';
+    const targetUrl = new URL(
+      `/api/drafts/${encodeURIComponent(req.params.customer)}/media`,
+      config.ECHO_SERVICE_BASE_URL
+    );
+    targetUrl.searchParams.set('businessNumber', String(business));
 
-    if (contentType.includes('multipart/form-data')) {
-      // Pipe multipart request directly to EchoService (preserves files)
-      const targetUrl = new URL(
-        `/api/conversations/${encodeURIComponent(req.params.customer)}/send`,
-        config.ECHO_SERVICE_BASE_URL
+    // Strip browser-only headers — this is a server-to-server call, so the
+    // user's Origin/Referer/Cookie shouldn't travel through or EchoService
+    // will reject them via CORS.
+    const {
+      origin: _o, referer: _r, cookie: _c, host: _h,
+      ...forwardHeaders
+    } = req.headers;
+    forwardHeaders.host = targetUrl.host;
+
+    const transport = targetUrl.protocol === 'https:' ? https : http;
+    const proxyReq = transport.request(targetUrl, {
+      method: 'POST',
+      headers: forwardHeaders
+    }, (proxyRes) => {
+      res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
+      proxyRes.pipe(res);
+    });
+
+    proxyReq.on('error', (err) => { next(err); });
+    req.pipe(proxyReq);
+  });
+
+  app.get('/api/drafts/:customer/media', async (req, res, next) => {
+    try {
+      const result = await proxyEchoService(config, req, `/api/drafts/${encodeURIComponent(req.params.customer)}/media`, 'GET');
+      return res.status(result.status).json(result.data);
+    } catch (error) { next(error); }
+  });
+
+  app.delete('/api/drafts/:customer/media/:draftMediaId', async (req, res, next) => {
+    try {
+      const result = await proxyEchoService(
+        config,
+        req,
+        `/api/drafts/${encodeURIComponent(req.params.customer)}/media/${encodeURIComponent(req.params.draftMediaId)}`,
+        'DELETE'
       );
-      targetUrl.searchParams.set('businessNumber', String(business));
-
-      const transport = targetUrl.protocol === 'https:' ? https : http;
-      const proxyReq = transport.request(targetUrl, {
-        method: 'POST',
-        headers: {
-          ...req.headers,
-          host: targetUrl.host
-        }
-      }, (proxyRes) => {
-        res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
-        proxyRes.pipe(res);
-      });
-
-      proxyReq.on('error', (err) => {
-        next(err);
-      });
-
-      req.pipe(proxyReq);
-    } else {
-      // JSON send (existing behavior)
-      proxyEchoService(config, req, `/api/conversations/${encodeURIComponent(req.params.customer)}/send`, 'POST', { text: req.body?.text ?? '' })
-        .then(result => res.status(result.status).json(result.data))
-        .catch(next);
-    }
+      return res.status(result.status).json(result.data);
+    } catch (error) { next(error); }
   });
 
   // ── Settings page ──────────────────────────────────────────────────────────

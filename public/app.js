@@ -6,7 +6,11 @@ const MAX_FILES = 10;
 
 let currentCustomer = null;
 let draftingNew = false;
-let pendingFiles = []; // Array of File objects for outbound attachments
+// Array of draft media entries for the active conversation.
+// Each entry: { draftMediaId?, displayName, contentType, contentLength,
+//   storagePath?, thumbnailPath?, status: 'uploading'|'ready'|'error',
+//   localPreviewUrl?, abortController?, error? }
+let pendingDraftMedia = [];
 
 /* ── Helpers ── */
 
@@ -367,11 +371,17 @@ async function openConversation(customer, skipRead) {
   showPanel('thread');
   clearAttachments();
 
-  // Restore draft
-  const draftKey = 'draft-' + customer;
-  const draft = localStorage.getItem(draftKey);
+  // Restore draft (text + attachments)
   const txt = document.getElementById('text');
-  if (draft && !skipRead) { txt.value = draft; } else if (!skipRead) { txt.value = ''; }
+  if (!skipRead) {
+    const { text, draftMediaIds } = readDraft(customer);
+    txt.value = text || '';
+    if (draftMediaIds.length > 0) {
+      pendingDraftMedia = await rehydrateDraftMedia(customer, draftMediaIds);
+      renderAttachmentPreviews();
+      saveDraftMediaIds();
+    }
+  }
 
   const r = await fetch('/api/conversations/' + customer + '/messages');
   const data = await r.json();
@@ -453,64 +463,234 @@ async function openConversation(customer, skipRead) {
 
 /* ── Attachment handling ── */
 
+function getSendButton() {
+  return document.querySelector('#compose button[type="submit"]');
+}
+
+function updateSendButtonState() {
+  const btn = getSendButton();
+  if (!btn) return;
+  const hasUploading = pendingDraftMedia.some(m => m.status === 'uploading');
+  btn.disabled = hasUploading;
+  btn.classList.toggle('opacity-50', hasUploading);
+  btn.classList.toggle('cursor-not-allowed', hasUploading);
+}
+
 function clearAttachments() {
-  pendingFiles = [];
+  for (const m of pendingDraftMedia) {
+    if (m.localPreviewUrl) URL.revokeObjectURL(m.localPreviewUrl);
+    if (m.status === 'uploading' && m.abortController) {
+      try { m.abortController.abort(); } catch (_) {}
+    }
+  }
+  pendingDraftMedia = [];
   renderAttachmentPreviews();
+}
+
+function saveDraftMediaIds() {
+  if (!currentCustomer) return;
+  const key = 'draft-' + currentCustomer;
+  const text = document.getElementById('text').value;
+  const ids = pendingDraftMedia.filter(m => m.status === 'ready' && m.draftMediaId).map(m => m.draftMediaId);
+  if (!text.trim() && ids.length === 0) {
+    localStorage.removeItem(key);
+    return;
+  }
+  localStorage.setItem(key, JSON.stringify({ text, draftMediaIds: ids }));
+}
+
+function readDraft(customer) {
+  const raw = localStorage.getItem('draft-' + customer);
+  if (!raw) return { text: '', draftMediaIds: [] };
+  if (raw.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(raw);
+      return {
+        text: typeof parsed.text === 'string' ? parsed.text : '',
+        draftMediaIds: Array.isArray(parsed.draftMediaIds) ? parsed.draftMediaIds : []
+      };
+    } catch (_) { /* fall through to legacy */ }
+  }
+  return { text: raw, draftMediaIds: [] };
+}
+
+async function rehydrateDraftMedia(customer, wantedIds) {
+  if (!wantedIds || wantedIds.length === 0) return [];
+  try {
+    const r = await fetch('/api/drafts/' + customer + '/media');
+    if (!r.ok) return [];
+    const data = await r.json();
+    const byId = new Map((data.items || []).map(it => [it.draftMediaId, it]));
+    const restored = [];
+    for (const id of wantedIds) {
+      const it = byId.get(id);
+      if (!it) continue;
+      restored.push({
+        draftMediaId: it.draftMediaId,
+        displayName: it.displayName,
+        contentType: it.contentType,
+        contentLength: it.contentLength,
+        storagePath: it.storagePath,
+        thumbnailPath: it.thumbnailPath,
+        status: 'ready'
+      });
+    }
+    return restored;
+  } catch (err) {
+    console.warn('[drafts] rehydrate failed:', err.message);
+    return [];
+  }
 }
 
 function renderAttachmentPreviews() {
   const container = document.getElementById('attachments');
   container.innerHTML = '';
 
-  if (pendingFiles.length === 0) {
+  if (pendingDraftMedia.length === 0) {
     container.classList.add('hidden');
     container.classList.remove('flex');
+    updateSendButtonState();
     return;
   }
 
   container.classList.remove('hidden');
   container.classList.add('flex');
 
-  pendingFiles.forEach((file, idx) => {
+  pendingDraftMedia.forEach((entry, idx) => {
     const card = document.createElement('div');
-    card.className = 'relative flex-shrink-0 w-24 h-24 rounded-xl border border-slate-200 overflow-hidden bg-slate-50 group';
+    const borderClass = entry.status === 'error' ? 'border-red-400' : 'border-slate-200';
+    card.className = 'relative flex-shrink-0 w-24 h-24 rounded-xl border overflow-hidden bg-slate-50 group ' + borderClass;
 
-    if (file.type.startsWith('image/')) {
+    const ct = (entry.contentType || '').toLowerCase();
+    const isImage = ct.startsWith('image/');
+    const isVideo = ct.startsWith('video/');
+
+    // Always prefer the local blob preview when available — it's the original,
+    // sharp image and doesn't depend on the server serving it back. Only fall
+    // back to the server-stored file when we've rehydrated a draft in a new
+    // session and the blob URL is gone.
+    let imgSrc = null;
+    if (entry.localPreviewUrl && (isImage || isVideo)) {
+      imgSrc = entry.localPreviewUrl;
+    } else if (entry.status === 'ready' && isImage && entry.storagePath) {
+      imgSrc = MEDIA_BASE_URL + entry.storagePath;
+    }
+
+    if (imgSrc && isImage) {
       const img = document.createElement('img');
-      img.src = URL.createObjectURL(file);
+      img.src = imgSrc;
       img.className = 'w-full h-full object-cover';
       card.appendChild(img);
-    } else if (file.type.startsWith('video/')) {
+    } else if (isVideo && entry.localPreviewUrl) {
       const video = document.createElement('video');
-      video.src = URL.createObjectURL(file);
+      video.src = entry.localPreviewUrl;
       video.className = 'w-full h-full object-cover';
       video.muted = true;
       video.preload = 'metadata';
-      const playIcon = document.createElement('div');
-      playIcon.className = 'absolute inset-0 flex items-center justify-center bg-black/20';
-      playIcon.innerHTML = '<svg class="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
       card.appendChild(video);
+      const playIcon = document.createElement('div');
+      playIcon.className = 'absolute inset-0 flex items-center justify-center bg-black/20 pointer-events-none';
+      playIcon.innerHTML = '<svg class="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
       card.appendChild(playIcon);
     } else {
       const iconWrap = document.createElement('div');
       iconWrap.className = 'flex flex-col items-center justify-center h-full p-2';
-      iconWrap.innerHTML = getFileIconSvg(file.type) + '<div class="text-[10px] text-slate-500 truncate w-full text-center mt-1">' + escapeHtml(file.name) + '</div>';
+      iconWrap.innerHTML = getFileIconSvg(ct) + '<div class="text-[10px] text-slate-500 truncate w-full text-center mt-1">' + escapeHtml(entry.displayName || 'file') + '</div>';
       card.appendChild(iconWrap);
     }
 
-    // Remove button
+    if (entry.status === 'uploading') {
+      const overlay = document.createElement('div');
+      overlay.className = 'absolute inset-0 flex items-center justify-center bg-black/40 pointer-events-none';
+      overlay.innerHTML = '<svg class="animate-spin w-6 h-6 text-white" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg>';
+      card.appendChild(overlay);
+    } else if (entry.status === 'error') {
+      const errBadge = document.createElement('div');
+      errBadge.className = 'absolute bottom-0 inset-x-0 bg-red-500/90 text-white text-[10px] text-center px-1 py-0.5 truncate';
+      errBadge.textContent = entry.error || 'Upload failed';
+      card.appendChild(errBadge);
+    }
+
     const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
     removeBtn.className = 'absolute top-1 right-1 w-5 h-5 rounded-full bg-black/50 text-white text-xs flex items-center justify-center hover:bg-red-500 transition-colors';
     removeBtn.textContent = '\u00D7';
     removeBtn.onclick = (e) => {
       e.stopPropagation();
-      pendingFiles.splice(idx, 1);
-      renderAttachmentPreviews();
+      removeAttachment(idx);
     };
     card.appendChild(removeBtn);
 
     container.appendChild(card);
   });
+
+  updateSendButtonState();
+}
+
+async function removeAttachment(idx) {
+  const entry = pendingDraftMedia[idx];
+  if (!entry) return;
+  if (entry.status === 'uploading' && entry.abortController) {
+    try { entry.abortController.abort(); } catch (_) {}
+  }
+  if (entry.localPreviewUrl) URL.revokeObjectURL(entry.localPreviewUrl);
+  pendingDraftMedia.splice(idx, 1);
+  renderAttachmentPreviews();
+  saveDraftMediaIds();
+  if (entry.status === 'ready' && entry.draftMediaId && currentCustomer) {
+    try {
+      await fetch('/api/drafts/' + currentCustomer + '/media/' + encodeURIComponent(entry.draftMediaId), { method: 'DELETE' });
+    } catch (err) {
+      console.warn('[drafts] delete failed:', err.message);
+    }
+  }
+}
+
+async function uploadDraftFile(file, entry) {
+  const customer = currentCustomer;
+  if (!customer) {
+    entry.status = 'error';
+    entry.error = 'Pick a conversation first';
+    renderAttachmentPreviews();
+    return;
+  }
+
+  const controller = new AbortController();
+  entry.abortController = controller;
+
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const r = await fetch('/api/drafts/' + customer + '/media', {
+      method: 'POST',
+      body: fd,
+      signal: controller.signal
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+
+    if (pendingDraftMedia.indexOf(entry) === -1) return;
+
+    entry.draftMediaId = data.draftMediaId;
+    entry.displayName = data.displayName;
+    entry.contentType = data.contentType;
+    entry.contentLength = data.contentLength;
+    entry.storagePath = data.storagePath;
+    entry.thumbnailPath = data.thumbnailPath;
+    entry.status = 'ready';
+    entry.abortController = null;
+    // Keep entry.localPreviewUrl — it's the original blob and renders crisper
+    // than any server-side file for the composer tile.
+    renderAttachmentPreviews();
+    saveDraftMediaIds();
+  } catch (err) {
+    if (err.name === 'AbortError') return;
+    if (pendingDraftMedia.indexOf(entry) === -1) return;
+    entry.status = 'error';
+    entry.error = 'Upload failed';
+    entry.abortController = null;
+    renderAttachmentPreviews();
+  }
 }
 
 // Attach button click
@@ -521,18 +701,41 @@ document.getElementById('btnAttach').addEventListener('click', () => {
 // File input change
 document.getElementById('fileInput').addEventListener('change', (e) => {
   const files = Array.from(e.target.files || []);
-  e.target.value = ''; // Reset so same file can be re-selected
+  e.target.value = '';
+
+  // When drafting a new conversation, promote the typed customer number to
+  // currentCustomer so uploaded drafts are scoped correctly.
+  if (!currentCustomer && draftingNew) {
+    const typed = normalizeNum(document.getElementById('customerInput').value);
+    if (/^\d{10}$/.test(typed || '')) {
+      currentCustomer = typed;
+    }
+  }
+  if (!currentCustomer) {
+    alert('Enter a 10-digit customer number before attaching files.');
+    return;
+  }
 
   for (const file of files) {
     if (file.size > MAX_FILE_SIZE) {
       alert('File "' + file.name + '" exceeds 3.5 MB limit.');
       continue;
     }
-    if (pendingFiles.length >= MAX_FILES) {
+    if (pendingDraftMedia.length >= MAX_FILES) {
       alert('Maximum ' + MAX_FILES + ' attachments per message.');
       break;
     }
-    pendingFiles.push(file);
+    const ct = file.type || '';
+    const localPreviewUrl = (ct.startsWith('image/') || ct.startsWith('video/')) ? URL.createObjectURL(file) : null;
+    const entry = {
+      displayName: file.name,
+      contentType: ct,
+      contentLength: file.size,
+      status: 'uploading',
+      localPreviewUrl
+    };
+    pendingDraftMedia.push(entry);
+    uploadDraftFile(file, entry);
   }
   renderAttachmentPreviews();
 });
@@ -552,37 +755,32 @@ document.getElementById('compose').addEventListener('submit', async (e) => {
   }
   if (!to) return;
 
-  let r;
-  if (pendingFiles.length > 0) {
-    // Multipart send with files
-    const formData = new FormData();
-    formData.append('text', txt.value);
-    for (const file of pendingFiles) {
-      formData.append('files', file);
-    }
-    r = await fetch('/api/conversations/' + to + '/send', {
-      method: 'POST',
-      body: formData
-    });
-  } else {
-    // Text-only JSON send
-    r = await fetch('/api/conversations/' + to + '/send', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text: txt.value })
-    });
+  if (pendingDraftMedia.some(m => m.status === 'uploading')) {
+    alert('Waiting for attachment uploads to finish\u2026');
+    return;
   }
 
+  const draftMediaIds = pendingDraftMedia.filter(m => m.status === 'ready' && m.draftMediaId).map(m => m.draftMediaId);
+  const r = await fetch('/api/conversations/' + to + '/send', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: txt.value, draftMediaIds })
+  });
+
   const data = await r.json();
+  if (data && data.ok === false) {
+    // Keep the composer as-is so the user can edit and retry — draft media
+    // rows on the server are untouched when send fails, and the Bandwidth
+    // URLs haven't been committed.
+    alert('Carrier failure: ' + (typeof data.details === 'string' ? data.details : JSON.stringify(data.details)));
+    return;
+  }
   txt.value = '';
   txt.style.height = 'auto';
   clearAttachments();
   localStorage.removeItem('draft-' + to);
   await openConversation(to, true);
   await loadConversations();
-  if (data && data.ok === false) {
-    alert('Carrier failure: ' + (typeof data.details === 'string' ? data.details : JSON.stringify(data.details)));
-  }
 });
 
 /* ── Draft saving ── */
@@ -592,14 +790,8 @@ document.getElementById('text').addEventListener('input', function () {
   this.style.height = 'auto';
   this.style.height = Math.min(this.scrollHeight, 128) + 'px';
 
-  // Save draft
-  if (currentCustomer) {
-    if (this.value.trim()) {
-      localStorage.setItem('draft-' + currentCustomer, this.value);
-    } else {
-      localStorage.removeItem('draft-' + currentCustomer);
-    }
-  }
+  // Save draft (text + any ready draftMediaIds)
+  saveDraftMediaIds();
 });
 
 /* Send on Enter (Shift+Enter for newline) */
