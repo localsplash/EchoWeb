@@ -71,6 +71,26 @@
       </div>
     </section>
 
+    <!-- Sign-in Methods -->
+    <section class="bg-white rounded-2xl border border-slate-200 shadow-sm mb-6">
+      <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+        <h2 class="text-sm font-semibold text-slate-700 uppercase tracking-wide">Sign-in Methods</h2>
+        <a href="/auth/google/link?return=/settings"
+          class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold transition-colors">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/>
+          </svg>
+          Link Google
+        </a>
+      </div>
+      <p class="px-6 pt-4 text-xs text-slate-500">
+        Any of these can be used to sign in to Echo. You can link more than one Google account.
+      </p>
+      <div id="identityList" class="px-6 py-4 space-y-2">
+        <div class="text-sm text-slate-400">Loading…</div>
+      </div>
+    </section>
+
     <!-- Carrier Applications -->
     <section class="bg-white rounded-2xl border border-slate-200 shadow-sm">
       <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">

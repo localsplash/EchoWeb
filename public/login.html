@@ -3,65 +3,123 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Q-Derm Staff Login</title>
+  <title>Echo · Sign In</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
-      theme: {
-        extend: {
-          fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] }
-        }
-      }
+      theme: { extend: { fontFamily: { sans: ['Inter','system-ui','sans-serif'] } } }
     }
   </script>
 </head>
 <body class="bg-gradient-to-br from-slate-100 to-blue-50 min-h-screen flex items-center justify-center p-4 font-sans">
-  <form method="post" action="/login" class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-sm">
+
+  <div class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-sm">
+
+    <!-- Logo -->
     <div class="flex justify-center mb-6">
       <div class="w-14 h-14 rounded-2xl bg-blue-600 flex items-center justify-center">
         <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+          <path stroke-linecap="round" stroke-linejoin="round"
+            d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863
+               9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3
+               12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
         </svg>
       </div>
     </div>
-    <h1 class="text-2xl font-bold text-slate-800 text-center">Q-Dermatology</h1>
-    <p class="text-sm text-slate-500 text-center mt-1 mb-8">Staff messaging portal</p>
-    <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Business Number</label>
-    <input
-      name="businessNumber"
-      inputmode="numeric"
-      pattern="\(\d{3}\) \d{3}-\d{4}"
-      maxlength="14"
-      minlength="14"
-      required
-      placeholder="(714) 555-1234"
-      class="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all text-center font-bold placeholder:text-[#D1D5DB]"
-      style="font-size:2.2rem; letter-spacing:0; line-height:1.05;"
-      oninput="formatBusinessNumber(this)"
-    />
-    <button type="submit" class="w-full mt-4 py-3 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold rounded-xl transition-colors">
-      Continue
-    </button>
-  </form>
+
+    <h1 class="text-2xl font-bold text-slate-800 text-center">Echo</h1>
+    <p class="text-sm text-slate-500 text-center mt-1 mb-8">Your messaging workspace</p>
+
+    <!-- Error banner -->
+    <div id="errorBanner" class="hidden mb-4 px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700"></div>
+
+    <!-- Google sign-in -->
+    <a href="/auth/google"
+       class="flex items-center justify-center gap-3 w-full py-3 px-4 rounded-xl
+              border border-slate-200 hover:border-slate-300 hover:bg-slate-50
+              transition-all text-slate-700 font-medium text-sm mb-3">
+      <!-- Google G icon -->
+      <svg class="w-5 h-5 flex-shrink-0" viewBox="0 0 24 24">
+        <path fill="#4285F4"
+          d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26
+             1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92
+             3.28-4.74 3.28-8.09z"/>
+        <path fill="#34A853"
+          d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23
+             1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99
+             20.53 7.7 23 12 23z"/>
+        <path fill="#FBBC05"
+          d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43
+             8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+        <path fill="#EA4335"
+          d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09
+             14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6
+             3.3-4.53 6.16-4.53z"/>
+      </svg>
+      Continue with Google
+    </a>
+
+    <!-- ISP / UISP sign-in (href + visibility set by config.js) -->
+    <a id="uispBtn" href="#"
+       class="hidden items-center justify-center gap-3 w-full py-3 px-4 rounded-xl
+              border border-slate-200 hover:border-slate-300 hover:bg-slate-50
+              transition-all text-slate-700 font-medium text-sm">
+      <svg class="w-5 h-5 flex-shrink-0 text-slate-500" fill="none" stroke="currentColor"
+           stroke-width="2" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round"
+          d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0
+             003.286-17.86M12 21a9.004 9.004 0 01-3.286-17.86M12
+             21a9.004 9.004 0 01-8.716-6.747M12 3a9.004 9.004 0
+             018.716 6.747M12 3a9.004 9.004 0 00-8.716 6.747m17.432
+             0H3.284M12 3v18"/>
+      </svg>
+      Sign in with your ISP account
+    </a>
+
+    <p class="mt-6 text-xs text-slate-400 text-center">
+      New to Echo? Sign in via your ISP account to get started.
+    </p>
+
+  </div>
+
+  <script src="/config.js"></script>
   <script>
-    function formatBusinessNumber(el) {
-      const digits = String(el.value || '').replace(/\D/g, '').slice(0, 10);
-      if (digits.length <= 3) {
-        el.value = digits;
-      } else if (digits.length <= 6) {
-        el.value = `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
-      } else {
-        el.value = `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
-      }
+    // The UISP plugin's public URL is generated by UCRM at install time, so it
+    // is supplied via config rather than constructed. Until it's set, there is
+    // nowhere to send the user — leave the button hidden.
+    const btn = document.getElementById('uispBtn');
+    if (window.ECHO_CONFIG?.UISP_PLUGIN_URL) {
+      btn.href = window.ECHO_CONFIG.UISP_PLUGIN_URL;
+      btn.classList.remove('hidden');
+      btn.classList.add('flex');
     }
 
-    document.querySelector('form').addEventListener('submit', function () {
-      const input = document.querySelector('input[name="businessNumber"]');
-      input.value = String(input.value || '').replace(/\D/g, '').slice(0, 10);
-    });
+    // Show error banners from query params
+    const params = new URLSearchParams(location.search);
+    const errorMap = {
+      google_denied:          'Google sign-in was cancelled.',
+      missing_code:           'Google did not return an auth code.',
+      invalid_state:          'Login session expired. Please try again.',
+      csrf_mismatch:          'Security check failed. Please try again.',
+      token_exchange_failed:  'Could not complete Google sign-in. Please try again.',
+      userinfo_failed:        'Could not read your Google account info.',
+      no_account:             'No Echo account found for this Google address. Please sign in via your ISP account first.',
+      no_membership:          'Your account isn\'t connected to any organisation yet.',
+      uisp_fetch_failed:      'Could not reach your ISP account. Please try again.',
+      sso_replay:             'This sign-in link has already been used. Please try again.',
+      sso_not_configured:     'ISP sign-in is not yet configured. Please contact support.',
+      invalid_sso_code:       'The ISP sign-in link is invalid or expired. Please try again.',
+      missing_sso_params:     'Incomplete sign-in link from your ISP portal.',
+    };
+    const err = params.get('auth_error');
+    if (err && errorMap[err]) {
+      const banner = document.getElementById('errorBanner');
+      banner.textContent = errorMap[err];
+      banner.classList.remove('hidden');
+    }
   </script>
 </body>
 </html>

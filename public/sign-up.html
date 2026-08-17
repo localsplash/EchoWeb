@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Echo · Sign Up</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: { extend: { fontFamily: { sans: ['Inter','system-ui','sans-serif'] } } }
+    }
+  </script>
+</head>
+<body class="bg-gradient-to-br from-slate-100 to-blue-50 min-h-screen flex items-center justify-center p-4 font-sans">
+
+  <div class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-sm text-center">
+
+    <div class="w-14 h-14 rounded-2xl bg-blue-600 flex items-center justify-center mx-auto mb-5">
+      <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round"
+          d="M18 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 11-6.75 0 3.375
+             3.375 0 016.75 0zM3 19.235v-.11a6.375 6.375 0 0112.75 0v.109A12.318
+             12.318 0 019.374 21c-2.331 0-4.512-.645-6.374-1.766z"/>
+      </svg>
+    </div>
+
+    <h1 class="text-xl font-bold text-slate-800">Let's get you started</h1>
+    <p class="text-sm text-slate-500 mt-3">
+      We couldn't find your email address on an existing ISP account, so there's
+      nothing to connect Echo to yet.
+    </p>
+
+    <div class="mt-6 rounded-xl border-2 border-dashed border-slate-200 px-4 py-5">
+      <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Coming soon</p>
+      <p class="text-sm text-slate-500 mt-1">
+        Self-service sign-up isn't built yet.
+      </p>
+    </div>
+
+    <p class="text-sm text-slate-500 mt-6">
+      If you're already a subscriber, you may have signed in with a different
+      email than the one on your account — try again with that address, or sign
+      in through your ISP portal.
+    </p>
+
+    <a href="/" class="mt-6 inline-block text-sm text-blue-600 hover:underline">
+      ← Back to sign in
+    </a>
+  </div>
+</body>
+</html>
