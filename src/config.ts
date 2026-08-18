@@ -18,6 +18,20 @@ const envSchema = z.object({
   GOOGLE_CLIENT_ID: z.string().default(''),
   GOOGLE_CLIENT_SECRET: z.string().default(''),
 
+  // Microsoft (Entra ID) OAuth. The login page hides the button until the
+  // client id is set, so an unconfigured deployment simply doesn't offer it.
+  MICROSOFT_CLIENT_ID: z.string().default(''),
+  MICROSOFT_CLIENT_SECRET: z.string().default(''),
+  // Authority segment. 'common' accepts any work/school account plus personal
+  // Microsoft accounts — the parallel to Google accepting any Google account.
+  // A directory (tenant) GUID here would restrict sign-in to that tenant alone.
+  MICROSOFT_TENANT: z.string().default('common'),
+  // Wisp's own directory. Super-admin is granted on an @wisp.net address, and
+  // Entra's `email` claim is tenant-controlled — so with MICROSOFT_TENANT set to
+  // 'common', any tenant on earth could mint one. Microsoft sign-ins therefore
+  // only reach the super-admin branch when the token came from this directory.
+  MICROSOFT_WISP_TENANT_ID: z.string().default('ae0d317b-49e2-46b9-84e7-964f8b1dedbb'),
+
   // UISP integration
   UISP_BASE_URL: z.string().url().default('https://my.wisp.net'),
   UISP_CRM_APP_KEY_READ: z.string().default(''),

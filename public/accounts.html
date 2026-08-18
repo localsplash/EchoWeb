@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="/img/echo-favicon.svg" type="image/svg+xml" />
   <title>Echo · Account Associations</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -60,9 +61,12 @@
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => (
       { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 
-    const PROVIDER = { google: 'Google', uisp: 'ISP', magic_link: 'Email link' };
+    const PROVIDER = {
+      google: 'Google', microsoft: 'Microsoft', uisp: 'UISP', magic_link: 'Email link',
+    };
     const PROVIDER_STYLE = {
       google:     'bg-blue-50 text-blue-700',
+      microsoft:  'bg-indigo-50 text-indigo-700',
       uisp:       'bg-amber-50 text-amber-700',
       magic_link: 'bg-slate-100 text-slate-600',
     };

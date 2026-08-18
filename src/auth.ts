@@ -24,6 +24,20 @@ export interface GoogleUserInfo {
   hd?: string; // hosted domain (Workspace accounts only)
 }
 
+/**
+ * What the login flow actually needs from an OAuth provider, so the callback
+ * logic can be shared rather than duplicated per provider.
+ */
+export interface OAuthUserInfo {
+  sub: string;
+  email: string;
+  name: string;
+  /** Verified domain, when the provider vouches for one (Google Workspace `hd`). */
+  hd?: string;
+  /** Entra directory the account lives in. Absent for Google. */
+  tenantId?: string;
+}
+
 // ─── Session helpers ──────────────────────────────────────────────────────────
 
 const SESSION_COOKIE = 'echo_session';
@@ -162,10 +176,20 @@ export function getSessionIdFromRequest(req: import('express').Request): string 
 
 // ─── Google OAuth ─────────────────────────────────────────────────────────────
 
+/** Login providers that go through the OAuth redirect dance. */
+export type OAuthProvider = 'google' | 'microsoft';
+
 export interface OAuthState {
   csrf: string;
-  /** 'link' attaches a Google identity to an already-signed-in user. */
+  /** 'link' attaches the returning identity to an already-signed-in user. */
   context: 'login' | 'link' | 'superadmin';
+  /**
+   * Which provider this state was minted for. Both flows share one state
+   * cookie, so each callback checks this and refuses a state belonging to the
+   * other — otherwise an abandoned "link Google" attempt would silently turn a
+   * later Microsoft sign-in into a link against that stale session.
+   */
+  provider: OAuthProvider;
   linkSessionId?: string;
   returnTo?: string;
 }
@@ -250,6 +274,98 @@ export async function getGoogleUserInfo(
   });
   if (!resp.ok) return null;
   return resp.json() as Promise<GoogleUserInfo>;
+}
+
+// ─── Microsoft (Entra ID) OAuth ───────────────────────────────────────────────
+
+function microsoftAuthority(config: AppConfig): string {
+  return `https://login.microsoftonline.com/${encodeURIComponent(config.MICROSOFT_TENANT)}`;
+}
+
+export function microsoftRedirectUri(config: AppConfig): string {
+  return `${config.APP_BASE_URL}/auth/microsoft/callback`;
+}
+
+export function buildMicrosoftAuthUrl(config: AppConfig, state: OAuthState): string {
+  const stateParam = Buffer.from(JSON.stringify(state)).toString('base64url');
+  const params = new URLSearchParams({
+    client_id: config.MICROSOFT_CLIENT_ID,
+    redirect_uri: microsoftRedirectUri(config),
+    response_type: 'code',
+    // openid+profile+email is all we need; no Graph scopes, so no admin consent.
+    scope: 'openid profile email',
+    state: stateParam,
+    response_mode: 'query',
+    prompt: 'select_account',
+  });
+  return `${microsoftAuthority(config)}/oauth2/v2.0/authorize?${params.toString()}`;
+}
+
+export async function exchangeMicrosoftCode(
+  config: AppConfig,
+  code: string
+): Promise<{ access_token: string; id_token: string } | null> {
+  const resp = await fetch(`${microsoftAuthority(config)}/oauth2/v2.0/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      code,
+      client_id: config.MICROSOFT_CLIENT_ID,
+      client_secret: config.MICROSOFT_CLIENT_SECRET,
+      redirect_uri: microsoftRedirectUri(config),
+      grant_type: 'authorization_code',
+      scope: 'openid profile email',
+    }),
+  });
+  if (!resp.ok) return null;
+  return resp.json() as Promise<{ access_token: string; id_token: string }>;
+}
+
+interface MicrosoftIdTokenClaims {
+  sub?: string;
+  oid?: string;
+  tid?: string;
+  name?: string;
+  email?: string;
+  preferred_username?: string;
+}
+
+function decodeJwtPayload(jwt: string): Record<string, unknown> | null {
+  const parts = jwt.split('.');
+  if (parts.length !== 3) return null;
+  try {
+    return JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read the signed-in user out of the id_token.
+ *
+ * The token comes straight back from Microsoft's token endpoint over TLS, on a
+ * request authenticated with our client secret, so the claims are trustworthy
+ * without verifying the signature locally — the same trust model as the Google
+ * path's direct call to the userinfo endpoint.
+ *
+ * NOTE: Entra's `email` claim is set by the user's own tenant and is not proof
+ * of address ownership the way Google's is. Echo matches CRM contacts on this
+ * address (see provisionFromCrmClient), which means a tenant administrator can
+ * in principle claim an org by setting a user's email to a subscriber's contact
+ * address. Accepted deliberately; revisit by requiring the `xms_edov` optional
+ * claim if orgs ever need stricter control.
+ */
+export function parseMicrosoftIdToken(idToken: string): OAuthUserInfo | null {
+  const claims = decodeJwtPayload(idToken) as MicrosoftIdTokenClaims | null;
+  if (!claims?.sub) return null;
+
+  // `preferred_username` is the UPN for work/school accounts and the address
+  // for personal ones; `email` is only present when the tenant publishes it.
+  const candidate = claims.email ?? claims.preferred_username ?? '';
+  const email = candidate.includes('@') ? candidate.toLowerCase() : '';
+  if (!email) return null;
+
+  return { sub: claims.sub, email, name: claims.name ?? email, tenantId: claims.tid };
 }
 
 // ─── UISP SSO one-time code ───────────────────────────────────────────────────
@@ -470,7 +586,7 @@ export async function findUserByEmail(
 export interface IdentityRow {
   iIdentityId: number;
   iUserId: number;
-  provider: 'google' | 'magic_link' | 'uisp';
+  provider: 'google' | 'magic_link' | 'uisp' | 'microsoft';
   subject: string;
   email: string | null;
   dtCreated: string;
@@ -484,7 +600,7 @@ export async function listIdentities(
     `SELECT iIdentityId, iUserId, provider, subject, email, dtCreated
        FROM auth_tbl_Identity
       WHERE iUserId = ?
-      ORDER BY FIELD(provider,'uisp','google','magic_link'), dtCreated ASC`,
+      ORDER BY FIELD(provider,'uisp','google','microsoft','magic_link'), dtCreated ASC`,
     [iUserId]
   );
   return rows as unknown as IdentityRow[];
@@ -552,7 +668,7 @@ export async function adminListAccounts(pool: mysql.Pool): Promise<AdminAccountV
        LEFT JOIN auth_tbl_Membership m ON m.iOrgId  = o.iOrgId
        LEFT JOIN auth_tbl_User       u ON u.iUserId = m.iUserId
        LEFT JOIN auth_tbl_Identity   i ON i.iUserId = u.iUserId
-      ORDER BY o.iOrgId, u.iUserId, FIELD(i.provider,'uisp','google','magic_link')`
+      ORDER BY o.iOrgId, u.iUserId, FIELD(i.provider,'uisp','google','microsoft','magic_link')`
   );
 
   const orgs = new Map<number, AdminAccountView>();

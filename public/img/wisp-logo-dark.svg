@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="100%" height="100%">
+  <!-- Dark Background -->
+  <rect width="100%" height="100%" fill="#121212" />
+
+  <!-- Dot -->
+  <circle cx="150" cy="148" r="7" fill="#0055FF" />
+
+  <!-- Inner Arc -->
+  <path d="M 115 140 A 35 35 0 0 1 150 105"
+        fill="none"
+        stroke="#0055FF"
+        stroke-width="12"
+        stroke-linecap="round" />
+
+  <!-- Middle Arc -->
+  <path d="M 82 140 A 68 68 0 0 1 150 72"
+        fill="none"
+        stroke="#0055FF"
+        stroke-width="12"
+        stroke-linecap="round" />
+
+  <!-- Outer Arc -->
+  <path d="M 46 140 A 104 104 0 0 1 150 36"
+        fill="none"
+        stroke="#0055FF"
+        stroke-width="12"
+        stroke-linecap="round" />
+</svg>

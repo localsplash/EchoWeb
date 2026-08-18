@@ -59,7 +59,8 @@ async function loadAll() {
 
 const PROVIDER_LABEL = {
   google:     'Google',
-  uisp:       'ISP account',
+  microsoft:  'Microsoft',
+  uisp:       'Wisp.net UISP account',
   magic_link: 'Email link',
 };
 
@@ -407,13 +408,20 @@ async function saveCarrierApp() {
 
 /* ── Init ── */
 
-// Surface the outcome of a Google link round-trip, then drop the query string
-// so a refresh doesn't replay the message.
+// Microsoft is only offered where the server has credentials for it.
+if (window.ECHO_CONFIG?.MICROSOFT_ENABLED) {
+  const ms = document.getElementById('linkMicrosoftBtn');
+  if (ms) { ms.classList.remove('hidden'); ms.classList.add('flex'); }
+}
+
+// Surface the outcome of a link round-trip, then drop the query string so a
+// refresh doesn't replay the message.
 (function showLinkResult() {
   const q = new URLSearchParams(location.search);
-  if (q.get('linked') === 'google') showToast('Google account linked.');
+  const linked = q.get('linked');
+  if (PROVIDER_LABEL[linked]) showToast(`${PROVIDER_LABEL[linked]} account linked.`);
   else if (q.get('link_error') === 'already_linked')
-    showToast('That Google account is already linked to a different Echo user.', false);
+    showToast('That account is already linked to a different Echo user.', false);
   else return;
   history.replaceState({}, '', location.pathname);
 })();
