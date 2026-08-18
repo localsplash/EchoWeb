@@ -241,20 +241,20 @@ export function buildApp() {
   // ── OAuth sign-in (Google, Microsoft) ────────────────────────────────────────
 
   /**
-   * A wisp.net address is what grants super-admin, so it has to mean something.
-   * Google vouches for the Workspace domain it reports. Entra does not: with a
-   * 'common' authority the address in the token is whatever the user's own
-   * tenant put there, so any directory could mint one. Microsoft tokens
-   * therefore only reach this branch when they came from Wisp's own directory.
+   * A wisp.net address is what grants super-admin, so it has to mean something,
+   * and Google is the only provider trusted to assert one — it verifies the
+   * Workspace domain it reports. Entra does not: with a 'common' authority the
+   * address is whatever the user's own tenant put there, so any directory on
+   * earth could mint an @wisp.net user. wisp.net staff stay on Google, so
+   * Microsoft never reaches this branch.
+   *
+   * A wisp.net person who signs in with Microsoft is therefore treated as an
+   * ordinary user; having no membership, they are turned away rather than
+   * silently downgraded into someone else's org.
    */
   function isWispStaff(provider: OAuthProvider, userInfo: OAuthUserInfo): boolean {
-    const wispAddress =
-      userInfo.email?.toLowerCase().endsWith('@wisp.net') || userInfo.hd === 'wisp.net';
-    if (!wispAddress) return false;
-    if (provider === 'microsoft') {
-      return userInfo.tenantId === config.MICROSOFT_WISP_TENANT_ID;
-    }
-    return true;
+    if (provider !== 'google') return false;
+    return userInfo.email?.toLowerCase().endsWith('@wisp.net') || userInfo.hd === 'wisp.net';
   }
 
   /**
