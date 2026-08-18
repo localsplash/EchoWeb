@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Echo Messaging (active)">
+  <!-- Active state matching the exact #E5F0FF + #006FFF treatment used throughout the UISP icon set -->
+  <rect x="1" y="1" width="22" height="22" rx="3.5" fill="#E5F0FF"/>
+  <g fill="#006FFF">
+    <path fill-rule="evenodd" clip-rule="evenodd" d="M3 4C3 2.89543 3.89543 2 5 2H13C14.1046 2 15 2.89543 15 4V11C15 12.1046 14.1046 13 13 13H9.41421L5 17.4142V13H5C3.89543 13 3 12.1046 3 11V4ZM5 3H13C13.5523 3 14 3.44772 14 4V11C14 11.5523 13.5523 12 13 12H8.58579L6 14.5858V12H5C4.44772 12 4 11.5523 4 11V4C4 3.44772 4.44772 3 5 3Z"/>
+    <path d="M6 5H12V6.25H6V5Z"/>
+    <path d="M6 7.25H11V8.5H6V7.25Z"/>
+    <path d="M6 9.5H10V10.75H6V9.5Z"/>
+    <path d="M16.0 5.8C17.4 6.3 18.5 7.5 19.0 9.0L18.0 9.3C17.6 8.1 16.8 7.2 15.7 6.8Z"/>
+    <path d="M16.6 3.8C18.6 4.5 20.2 6.2 21.0 8.8L19.9 9.2C19.2 7.0 18.0 5.6 16.3 5.0Z"/>
+    <path d="M17.2 1.8C19.8 2.8 21.8 5.0 22.7 8.6L21.5 9.1C20.7 6.0 19.0 4.2 16.8 3.3Z"/>
+  </g>
+</svg>

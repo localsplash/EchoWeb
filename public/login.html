@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Echo · Sign In</title>
+  <link rel="icon" href="/img/echo-favicon.svg" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -21,11 +22,15 @@
     <!-- Logo -->
     <div class="flex justify-center mb-6">
       <div class="w-14 h-14 rounded-2xl bg-blue-600 flex items-center justify-center">
-        <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round"
-            d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863
-               9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3
-               12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+        <!-- Inlined rather than <img> so the mark inherits text-white via currentColor -->
+        <svg class="w-8 h-8 text-white" viewBox="0 0 24 24" fill="currentColor" role="img" aria-label="Echo Messaging">
+          <path fill-rule="evenodd" clip-rule="evenodd" d="M3 4C3 2.89543 3.89543 2 5 2H13C14.1046 2 15 2.89543 15 4V11C15 12.1046 14.1046 13 13 13H9.41421L5 17.4142V13H5C3.89543 13 3 12.1046 3 11V4ZM5 3H13C13.5523 3 14 3.44772 14 4V11C14 11.5523 13.5523 12 13 12H8.58579L6 14.5858V12H5C4.44772 12 4 11.5523 4 11V4C4 3.44772 4.44772 3 5 3Z"/>
+          <path d="M6 5H12V6.25H6V5Z"/>
+          <path d="M6 7.25H11V8.5H6V7.25Z"/>
+          <path d="M6 9.5H10V10.75H6V9.5Z"/>
+          <path d="M16.0 5.8C17.4 6.3 18.5 7.5 19.0 9.0L18.0 9.3C17.6 8.1 16.8 7.2 15.7 6.8Z"/>
+          <path d="M16.6 3.8C18.6 4.5 20.2 6.2 21.0 8.8L19.9 9.2C19.2 7.0 18.0 5.6 16.3 5.0Z"/>
+          <path d="M17.2 1.8C19.8 2.8 21.8 5.0 22.7 8.6L21.5 9.1C20.7 6.0 19.0 4.2 16.8 3.3Z"/>
         </svg>
       </div>
     </div>
@@ -62,25 +67,32 @@
       Continue with Google
     </a>
 
-    <!-- ISP / UISP sign-in (href + visibility set by config.js) -->
+    <!-- Microsoft sign-in (shown only when configured) -->
+    <a id="microsoftBtn" href="/auth/microsoft"
+       class="hidden items-center justify-center gap-3 w-full py-3 px-4 rounded-xl
+              border border-slate-200 hover:border-slate-300 hover:bg-slate-50
+              transition-all text-slate-700 font-medium text-sm mb-3">
+      <!-- Microsoft four-square logo -->
+      <svg class="w-5 h-5 flex-shrink-0" viewBox="0 0 23 23">
+        <path fill="#F25022" d="M1 1h10v10H1z"/>
+        <path fill="#7FBA00" d="M12 1h10v10H12z"/>
+        <path fill="#00A4EF" d="M1 12h10v10H1z"/>
+        <path fill="#FFB900" d="M12 12h10v10H12z"/>
+      </svg>
+      Continue with Microsoft
+    </a>
+
+    <!-- UISP sign-in (href + visibility set by config.js) -->
     <a id="uispBtn" href="#"
        class="hidden items-center justify-center gap-3 w-full py-3 px-4 rounded-xl
               border border-slate-200 hover:border-slate-300 hover:bg-slate-50
               transition-all text-slate-700 font-medium text-sm">
-      <svg class="w-5 h-5 flex-shrink-0 text-slate-500" fill="none" stroke="currentColor"
-           stroke-width="2" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round"
-          d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0
-             003.286-17.86M12 21a9.004 9.004 0 01-3.286-17.86M12
-             21a9.004 9.004 0 01-8.716-6.747M12 3a9.004 9.004 0
-             018.716 6.747M12 3a9.004 9.004 0 00-8.716 6.747m17.432
-             0H3.284M12 3v18"/>
-      </svg>
-      Sign in with your ISP account
+      <img src="/img/wisp-logo.svg" alt="" aria-hidden="true" class="w-5 h-5 flex-shrink-0" />
+      Continue with Wisp.net
     </a>
 
     <p class="mt-6 text-xs text-slate-400 text-center">
-      New to Echo? Sign in via your ISP account to get started.
+      New to Echo? Sign in via your Wisp.net UISP account to get started.
     </p>
 
   </div>
@@ -97,22 +109,32 @@
       btn.classList.add('flex');
     }
 
+    // Likewise, don't offer Microsoft until the server has credentials for it.
+    if (window.ECHO_CONFIG?.MICROSOFT_ENABLED) {
+      const ms = document.getElementById('microsoftBtn');
+      ms.classList.remove('hidden');
+      ms.classList.add('flex');
+    }
+
     // Show error banners from query params
     const params = new URLSearchParams(location.search);
     const errorMap = {
-      google_denied:          'Google sign-in was cancelled.',
-      missing_code:           'Google did not return an auth code.',
-      invalid_state:          'Login session expired. Please try again.',
-      csrf_mismatch:          'Security check failed. Please try again.',
-      token_exchange_failed:  'Could not complete Google sign-in. Please try again.',
-      userinfo_failed:        'Could not read your Google account info.',
-      no_account:             'No Echo account found for this Google address. Please sign in via your ISP account first.',
-      no_membership:          'Your account isn\'t connected to any organisation yet.',
-      uisp_fetch_failed:      'Could not reach your ISP account. Please try again.',
-      sso_replay:             'This sign-in link has already been used. Please try again.',
-      sso_not_configured:     'ISP sign-in is not yet configured. Please contact support.',
-      invalid_sso_code:       'The ISP sign-in link is invalid or expired. Please try again.',
-      missing_sso_params:     'Incomplete sign-in link from your ISP portal.',
+      google_denied:            'Google sign-in was cancelled.',
+      microsoft_denied:         'Microsoft sign-in was cancelled.',
+      microsoft_not_configured: 'Microsoft sign-in is not yet configured. Please contact support.',
+      missing_code:             'The sign-in provider did not return an auth code.',
+      invalid_state:            'Login session expired. Please try again.',
+      csrf_mismatch:            'Security check failed. Please try again.',
+      link_expired:             'Your session expired before the account could be linked. Please try again.',
+      token_exchange_failed:    'Could not complete sign-in. Please try again.',
+      userinfo_failed:          'Could not read your account info from the sign-in provider.',
+      no_account:               'No Echo account found for that address. Please sign in via your Wisp.net UISP account first.',
+      no_membership:            'Your account isn\'t connected to any organisation yet.',
+      uisp_fetch_failed:        'Could not reach your Wisp.net UISP account. Please try again.',
+      sso_replay:               'This sign-in link has already been used. Please try again.',
+      sso_not_configured:       'UISP sign-in is not yet configured. Please contact support.',
+      invalid_sso_code:         'The UISP sign-in link is invalid or expired. Please try again.',
+      missing_sso_params:       'Incomplete sign-in link from your Wisp.net UISP portal.',
     };
     const err = params.get('auth_error');
     if (err && errorMap[err]) {

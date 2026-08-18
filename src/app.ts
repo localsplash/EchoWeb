@@ -14,11 +14,14 @@ import {
   deleteSession,
   updateSessionBusinessNumber,
   buildGoogleAuthUrl,
+  buildMicrosoftAuthUrl,
   setOAuthStateCookie,
   clearOAuthStateCookie,
   getOAuthStateFromRequest,
   exchangeGoogleCode,
   getGoogleUserInfo,
+  exchangeMicrosoftCode,
+  parseMicrosoftIdToken,
   verifySsoCode,
   consumeNonce,
   fetchUispClient,
@@ -40,6 +43,8 @@ import {
   generateId,
   type SessionRow,
   type OAuthState,
+  type OAuthProvider,
+  type OAuthUserInfo,
 } from './auth';
 
 type ApiMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
@@ -132,7 +137,7 @@ async function provisionFromCrmClient(
     iBusinessNumber: number | null;
     displayName: string | null;
     contactEmail: string | null;
-    identity: { provider: 'uisp' | 'google'; subject: string; email: string | null };
+    identity: { provider: 'uisp' | 'google' | 'microsoft'; subject: string; email: string | null };
   }
 ): Promise<{ iOrgId: number; iUserId: number; isFirstEntry: boolean }> {
   const { iOrgId } = await upsertOrg(
@@ -184,10 +189,12 @@ export function buildApp() {
   app.use(pinoHttp({ logger }));
   app.use(express.static(publicDir, { index: false }));
 
-  // Browser config (media URL, UISP plugin URL).
+  // Browser config (media URL, UISP plugin URL, which logins are available).
   const configJs = `window.ECHO_CONFIG=${JSON.stringify({
     MEDIA_BASE_URL: config.MEDIA_BASE_URL,
     UISP_PLUGIN_URL: config.UISP_PLUGIN_URL,
+    // Only the flag — never the client id, which the browser has no use for.
+    MICROSOFT_ENABLED: Boolean(config.MICROSOFT_CLIENT_ID),
   })};`;
   app.get('/config.js', (_req, res) => {
     res.set('Content-Type', 'application/javascript');
@@ -231,13 +238,190 @@ export function buildApp() {
     return res.sendFile(path.join(publicDir, 'order-echo.html'));
   });
 
+  // ── OAuth sign-in (Google, Microsoft) ────────────────────────────────────────
+
+  /**
+   * A wisp.net address is what grants super-admin, so it has to mean something.
+   * Google vouches for the Workspace domain it reports. Entra does not: with a
+   * 'common' authority the address in the token is whatever the user's own
+   * tenant put there, so any directory could mint one. Microsoft tokens
+   * therefore only reach this branch when they came from Wisp's own directory.
+   */
+  function isWispStaff(provider: OAuthProvider, userInfo: OAuthUserInfo): boolean {
+    const wispAddress =
+      userInfo.email?.toLowerCase().endsWith('@wisp.net') || userInfo.hd === 'wisp.net';
+    if (!wispAddress) return false;
+    if (provider === 'microsoft') {
+      return userInfo.tenantId === config.MICROSOFT_WISP_TENANT_ID;
+    }
+    return true;
+  }
+
+  /**
+   * Validate the returned OAuth state against the cookie we set before leaving.
+   * Returns an error path on failure so callers stay a straight line.
+   */
+  function checkOAuthState(
+    req: express.Request,
+    provider: OAuthProvider
+  ): { state: OAuthState } | { error: string } {
+    const stored = getOAuthStateFromRequest(req);
+    if (!stored) return { error: '/?auth_error=invalid_state' };
+
+    // Both providers share one state cookie. Refusing a state minted for the
+    // other keeps an abandoned "link Google" attempt from turning a later
+    // Microsoft sign-in into a link against that stale session.
+    if (stored.provider !== provider) return { error: '/?auth_error=invalid_state' };
+
+    let returned: OAuthState;
+    try {
+      returned = JSON.parse(
+        Buffer.from(String(req.query.state ?? ''), 'base64url').toString('utf8')
+      ) as OAuthState;
+    } catch {
+      return { error: '/?auth_error=invalid_state' };
+    }
+    if (stored.csrf !== returned.csrf) return { error: '/?auth_error=csrf_mismatch' };
+
+    return { state: stored };
+  }
+
+  /**
+   * Everything that happens once a provider has told us who the user is.
+   *
+   * Google and Microsoft differ only in how the identity is obtained, so the
+   * super-admin, link and login branches live here rather than once per
+   * provider — one set of rules about who gets an account and who owns an org.
+   *
+   * Sets the session cookie as a side effect; returns where to send the user.
+   */
+  async function completeOAuthLogin(
+    res: express.Response,
+    provider: OAuthProvider,
+    userInfo: OAuthUserInfo,
+    storedState: OAuthState
+  ): Promise<string> {
+    // ── Super-admin path ───────────────────────────────────────────────────
+    if (isWispStaff(provider, userInfo)) {
+      let iUserId = await findUserByIdentity(db, provider, userInfo.sub);
+      if (!iUserId) {
+        // Auto-link by address: the provider has vouched for this one.
+        iUserId = await findUserByEmail(db, userInfo.email);
+        if (!iUserId) {
+          iUserId = await createUser(db, userInfo.email, userInfo.name);
+        }
+        await ensureIdentity(db, iUserId, provider, userInfo.sub, userInfo.email);
+      }
+      const sessionId = await createSuperAdminSession(db, iUserId);
+      setSessionCookie(res, sessionId);
+      return '/internal';
+    }
+
+    // ── Link path: attach this identity to the signed-in account ───────────
+    if (storedState.context === 'link' && storedState.linkSessionId) {
+      const linkSession = await getSession(db, storedState.linkSessionId);
+      if (!linkSession?.iUserId) return '/?auth_error=link_expired';
+
+      const back = storedState.returnTo ?? '/';
+
+      // If this account is already an identity, it must be this user's;
+      // otherwise two people would share one login.
+      const owner = await findUserByIdentity(db, provider, userInfo.sub);
+      if (owner && owner !== linkSession.iUserId) {
+        return `${back}?link_error=already_linked`;
+      }
+
+      await ensureIdentity(db, linkSession.iUserId, provider, userInfo.sub, userInfo.email);
+
+      // Record the address if we didn't have one.
+      await db.query(
+        `UPDATE auth_tbl_User SET email = COALESCE(email, ?) WHERE iUserId = ?`,
+        [userInfo.email, linkSession.iUserId]
+      );
+
+      return `${back}?linked=${provider}`;
+    }
+
+    // ── Regular login path ─────────────────────────────────────────────────
+    const iUserId = await findUserByIdentity(db, provider, userInfo.sub);
+
+    if (!iUserId) {
+      // Unknown to Echo. Before turning them away, ask the CRM whether this
+      // address belongs to a subscriber — a match on a CRM contact is the
+      // basis for binding the account.
+      let crmClient: Awaited<ReturnType<typeof findUispClientByEmail>>;
+      try {
+        crmClient = await findUispClientByEmail(config, userInfo.email);
+      } catch (lookupErr) {
+        // Couldn't ask — don't guess. Sending them to sign-up here would
+        // invite a duplicate org for an existing subscriber.
+        logger.error({ err: lookupErr }, '[auth] CRM email lookup failed');
+        return '/?auth_error=no_account';
+      }
+
+      // Not a subscriber at all → they need to sign up.
+      if (!crmClient) return '/sign-up';
+
+      const number = crmClient.hostedPulseNumber
+        ? parseInt(crmClient.hostedPulseNumber, 10)
+        : null;
+
+      const { iOrgId, iUserId: provisionedUserId } = await provisionFromCrmClient(db, {
+        clientId: crmClient.clientId,
+        iBusinessNumber: number,
+        displayName: crmClient.displayName,
+        contactEmail: crmClient.email,
+        identity: { provider, subject: userInfo.sub, email: userInfo.email },
+      });
+
+      const newSession = await createFullSession(db, {
+        iUserId: provisionedUserId,
+        iOrgId,
+        iBusinessNumber: number,
+        role: 'owner',
+      });
+      setSessionCookie(res, newSession);
+
+      // A subscriber with no hostedPulseNumber is a real org that simply has
+      // no number yet — keep the account and send them to buy one.
+      logger.info(
+        `[auth] matched ${provider} ${userInfo.email} to CRM client ${crmClient.clientId}` +
+        (number ? ` (number ${number})` : ' (no number yet)')
+      );
+      return number ? '/' : '/order-echo';
+    }
+
+    // Find membership (user should belong to at least one org)
+    const [memberRows] = await db.query<import('mysql2/promise').RowDataPacket[]>(
+      `SELECT m.iUserId, m.iOrgId, m.role, o.iBusinessNumber
+       FROM auth_tbl_Membership m
+       INNER JOIN auth_tbl_Org o ON o.iOrgId = m.iOrgId
+       WHERE m.iUserId = ? AND m.status = 'active'
+       ORDER BY FIELD(m.role,'owner','admin','member'), m.dtCreated ASC
+       LIMIT 1`,
+      [iUserId]
+    );
+
+    if (!memberRows.length) return '/?auth_error=no_membership';
+
+    const member = memberRows[0];
+    const sessionId = await createFullSession(db, {
+      iUserId,
+      iOrgId: member.iOrgId as number,
+      iBusinessNumber: member.iBusinessNumber as number,
+      role: member.role as 'owner' | 'admin' | 'member',
+    });
+    setSessionCookie(res, sessionId);
+    return '/';
+  }
+
   // ── Google OAuth ─────────────────────────────────────────────────────────────
 
-  // Plain sign-in only. Account linking goes through /welcome/google, which
+  // Plain sign-in only. Account linking goes through /auth/google/link, which
   // derives the target user from the server-side session — the context is never
   // taken from the request.
   app.get('/auth/google', async (_req, res) => {
-    const state: OAuthState = { csrf: generateId(16), context: 'login' };
+    const state: OAuthState = { csrf: generateId(16), context: 'login', provider: 'google' };
     setOAuthStateCookie(res, state);
     return res.redirect(buildGoogleAuthUrl(config, state));
   });
@@ -246,22 +430,12 @@ export function buildApp() {
     try {
       clearOAuthStateCookie(res);
 
-      const storedState = getOAuthStateFromRequest(req);
-      const returnedState = req.query.state as string;
+      if (req.query.error) return res.redirect('/?auth_error=google_denied');
       const code = req.query.code as string;
-      const error = req.query.error as string;
-
-      if (error) return res.redirect('/?auth_error=google_denied');
       if (!code) return res.redirect('/?auth_error=missing_code');
 
-      // Verify state (CSRF check)
-      if (!storedState) return res.redirect('/?auth_error=invalid_state');
-      const decodedReturned = JSON.parse(
-        Buffer.from(returnedState ?? '', 'base64url').toString('utf8')
-      ) as OAuthState;
-      if (storedState.csrf !== decodedReturned.csrf) {
-        return res.redirect('/?auth_error=csrf_mismatch');
-      }
+      const checked = checkOAuthState(req, 'google');
+      if ('error' in checked) return res.redirect(checked.error);
 
       const tokens = await exchangeGoogleCode(config, code);
       if (!tokens?.access_token) return res.redirect('/?auth_error=token_exchange_failed');
@@ -269,122 +443,41 @@ export function buildApp() {
       const userInfo = await getGoogleUserInfo(tokens.access_token);
       if (!userInfo?.sub) return res.redirect('/?auth_error=userinfo_failed');
 
-      const isWispDomain =
-        userInfo.email?.toLowerCase().endsWith('@wisp.net') ||
-        userInfo.hd === 'wisp.net';
+      return res.redirect(await completeOAuthLogin(res, 'google', userInfo, checked.state));
+    } catch (err) {
+      next(err);
+    }
+  });
 
-      // ── Super-admin path ───────────────────────────────────────────────────
-      if (isWispDomain) {
-        let iUserId = await findUserByIdentity(db, 'google', userInfo.sub);
-        if (!iUserId) {
-          // Check if user already exists by email (auto-link; Google email is provider-verified)
-          iUserId = await findUserByEmail(db, userInfo.email);
-          if (!iUserId) {
-            iUserId = await createUser(db, userInfo.email, userInfo.name);
-          }
-          await ensureIdentity(db, iUserId, 'google', userInfo.sub, userInfo.email);
-        }
-        const sessionId = await createSuperAdminSession(db, iUserId);
-        setSessionCookie(res, sessionId);
-        return res.redirect('/internal');
-      }
+  // ── Microsoft (Entra ID) OAuth ───────────────────────────────────────────────
 
-      // ── Link path: attach Google to the signed-in account ──────────────────
-      if (storedState.context === 'link' && storedState.linkSessionId) {
-        const linkSession = await getSession(db, storedState.linkSessionId);
-        if (!linkSession?.iUserId) return res.redirect('/?auth_error=link_expired');
+  app.get('/auth/microsoft', async (_req, res) => {
+    if (!config.MICROSOFT_CLIENT_ID) return res.redirect('/?auth_error=microsoft_not_configured');
+    const state: OAuthState = { csrf: generateId(16), context: 'login', provider: 'microsoft' };
+    setOAuthStateCookie(res, state);
+    return res.redirect(buildMicrosoftAuthUrl(config, state));
+  });
 
-        const back = storedState.returnTo ?? '/';
+  app.get('/auth/microsoft/callback', async (req, res, next) => {
+    try {
+      clearOAuthStateCookie(res);
 
-        // If this Google account is already an identity, it must be this user's;
-        // otherwise two people would share one login.
-        const owner = await findUserByIdentity(db, 'google', userInfo.sub);
-        if (owner && owner !== linkSession.iUserId) {
-          return res.redirect(`${back}?link_error=already_linked`);
-        }
+      if (req.query.error) return res.redirect('/?auth_error=microsoft_denied');
+      const code = req.query.code as string;
+      if (!code) return res.redirect('/?auth_error=missing_code');
 
-        await ensureIdentity(db, linkSession.iUserId, 'google', userInfo.sub, userInfo.email);
+      const checked = checkOAuthState(req, 'microsoft');
+      if ('error' in checked) return res.redirect(checked.error);
 
-        // Record the verified Google address if we didn't have one.
-        await db.query(
-          `UPDATE auth_tbl_User SET email = COALESCE(email, ?) WHERE iUserId = ?`,
-          [userInfo.email, linkSession.iUserId]
-        );
+      const tokens = await exchangeMicrosoftCode(config, code);
+      if (!tokens?.id_token) return res.redirect('/?auth_error=token_exchange_failed');
 
-        return res.redirect(`${back}?linked=google`);
-      }
+      // Microsoft returns the profile in the id_token itself, so there is no
+      // second userinfo round-trip as there is for Google.
+      const userInfo = parseMicrosoftIdToken(tokens.id_token);
+      if (!userInfo?.sub) return res.redirect('/?auth_error=userinfo_failed');
 
-      // ── Regular login path ─────────────────────────────────────────────────
-      const iUserId = await findUserByIdentity(db, 'google', userInfo.sub);
-
-      if (!iUserId) {
-        // Unknown to Echo. Before turning them away, ask the CRM whether this
-        // address belongs to a subscriber — Google has verified it, so a match
-        // on a CRM contact is a sound basis for binding the account.
-        let crmClient: Awaited<ReturnType<typeof findUispClientByEmail>>;
-        try {
-          crmClient = await findUispClientByEmail(config, userInfo.email);
-        } catch (lookupErr) {
-          // Couldn't ask — don't guess. Sending them to sign-up here would
-          // invite a duplicate org for an existing subscriber.
-          logger.error({ err: lookupErr }, '[auth] CRM email lookup failed');
-          return res.redirect('/?auth_error=no_account');
-        }
-
-        // Not a subscriber at all → they need to sign up.
-        if (!crmClient) return res.redirect('/sign-up');
-
-        const number = crmClient.hostedPulseNumber
-          ? parseInt(crmClient.hostedPulseNumber, 10)
-          : null;
-
-        const { iOrgId } = await provisionFromCrmClient(db, {
-          clientId: crmClient.clientId,
-          iBusinessNumber: number,
-          displayName: crmClient.displayName,
-          contactEmail: crmClient.email,
-          identity: { provider: 'google', subject: userInfo.sub, email: userInfo.email },
-        });
-
-        const newSession = await createFullSession(db, {
-          iUserId: (await findUserByIdentity(db, 'google', userInfo.sub))!,
-          iOrgId,
-          iBusinessNumber: number,
-          role: 'owner',
-        });
-        setSessionCookie(res, newSession);
-
-        // A subscriber with no hostedPulseNumber is a real org that simply has
-        // no number yet — keep the account and send them to buy one.
-        logger.info(
-          `[auth] matched Google ${userInfo.email} to CRM client ${crmClient.clientId}` +
-          (number ? ` (number ${number})` : ' (no number yet)')
-        );
-        return res.redirect(number ? '/' : '/order-echo');
-      }
-
-      // Find membership (user should belong to at least one org)
-      const [memberRows] = await db.query<import('mysql2/promise').RowDataPacket[]>(
-        `SELECT m.iUserId, m.iOrgId, m.role, o.iBusinessNumber
-         FROM auth_tbl_Membership m
-         INNER JOIN auth_tbl_Org o ON o.iOrgId = m.iOrgId
-         WHERE m.iUserId = ? AND m.status = 'active'
-         ORDER BY FIELD(m.role,'owner','admin','member'), m.dtCreated ASC
-         LIMIT 1`,
-        [iUserId]
-      );
-
-      if (!memberRows.length) return res.redirect('/?auth_error=no_membership');
-
-      const member = memberRows[0];
-      const sessionId = await createFullSession(db, {
-        iUserId,
-        iOrgId: member.iOrgId as number,
-        iBusinessNumber: member.iBusinessNumber as number,
-        role: member.role as 'owner' | 'admin' | 'member',
-      });
-      setSessionCookie(res, sessionId);
-      return res.redirect('/');
+      return res.redirect(await completeOAuthLogin(res, 'microsoft', userInfo, checked.state));
     } catch (err) {
       next(err);
     }
@@ -468,9 +561,13 @@ export function buildApp() {
     return res.sendFile(path.join(publicDir, 'welcome.html'));
   });
 
-  // Link an additional Google identity to the already-signed-in user. A user may
-  // hold several; any of them signs them in.
-  app.get('/auth/google/link', async (req, res) => {
+  // Link an additional identity to the already-signed-in user. A user may hold
+  // several of either provider; any of them signs them in.
+  async function startLink(
+    req: express.Request,
+    res: express.Response,
+    provider: OAuthProvider
+  ) {
     const session = await resolveSession(req);
     if (!session?.iUserId) return res.redirect('/');
 
@@ -482,11 +579,23 @@ export function buildApp() {
     const state: OAuthState = {
       csrf: generateId(16),
       context: 'link',
+      provider,
       linkSessionId: session.sSessionId,
       returnTo,
     };
     setOAuthStateCookie(res, state);
-    return res.redirect(buildGoogleAuthUrl(config, state));
+    return res.redirect(
+      provider === 'google'
+        ? buildGoogleAuthUrl(config, state)
+        : buildMicrosoftAuthUrl(config, state)
+    );
+  }
+
+  app.get('/auth/google/link', (req, res) => startLink(req, res, 'google'));
+
+  app.get('/auth/microsoft/link', (req, res) => {
+    if (!config.MICROSOFT_CLIENT_ID) return res.redirect('/?auth_error=microsoft_not_configured');
+    return startLink(req, res, 'microsoft');
   });
 
   // ── Sign-in methods (own account) ────────────────────────────────────────────
