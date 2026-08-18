@@ -25,6 +25,18 @@ function formatPhoneNumber(num) {
   return d;
 }
 
+// Rewrite a phone field in place to (XXX) XXX-XXXX as the user types or pastes.
+// Everything that isn't a digit is dropped, so "(714) 684-6530", "+1 714 684
+// 6530" and "WISP 7146846530" all land on the same ten digits. The field carries
+// no maxlength — an attribute cap counts the punctuation and letters too, which
+// is what used to truncate pasted numbers.
+function formatPhoneField(el) {
+  const d = normalizeNum(el.value).slice(0, 10);
+  if (d.length <= 3) el.value = d;
+  else if (d.length <= 6) el.value = '(' + d.slice(0, 3) + ') ' + d.slice(3);
+  else el.value = '(' + d.slice(0, 3) + ') ' + d.slice(3, 6) + '-' + d.slice(6);
+}
+
 function formatTime(dt) {
   if (!dt) return '';
   const d = new Date(dt);
@@ -64,12 +76,29 @@ function getAvatarColor(num) {
   return palettes[Math.abs(hash) % palettes.length];
 }
 
-function iconForEvent(e) {
-  if (Number(e) === 1) return '\u{1F4E9}';
-  if (Number(e) === 2) return '\u{1F553}';
-  if (Number(e) === 4) return '\u2705';
-  if (Number(e) === 8) return '\u274C';
-  return '\u{1F4AC}';
+const EVENT_FAILED = 8;
+
+const MESSAGE_STATUS = {
+  1: { icon: '\u{1F4E9}', label: 'Received' },
+  2: { icon: '\u{1F553}', label: 'Sending' },
+  4: { icon: '\u2705', label: 'Delivered' },
+  // Forbidden sign rather than a red cross: a cross reads as "close/dismiss"
+  // next to the per-message Delete button.
+  [EVENT_FAILED]: { icon: '\u26D4', label: 'Failed to deliver' }
+};
+
+function statusForEvent(e) {
+  return MESSAGE_STATUS[Number(e)] || { icon: '\u{1F4AC}', label: 'Message' };
+}
+
+// Human-readable reason for a failed send. The carrier detail rides along on the
+// message as errorDescription/iErrorCode; older rows have neither.
+function failureDetail(m) {
+  const desc = String(m.errorDescription || '').trim();
+  const code = m.iErrorCode ? String(m.iErrorCode).trim() : '';
+  if (desc) return code ? desc + ' (carrier error ' + code + ')' : desc;
+  if (code) return 'Carrier error ' + code;
+  return 'The carrier could not deliver this message.';
 }
 
 function escapeHtml(str) {
@@ -242,8 +271,10 @@ async function loadConversations() {
     topRow.appendChild(timeSpan);
 
     const preview = document.createElement('div');
-    preview.className = 'text-sm truncate mt-0.5' + (isUnread ? ' font-semibold text-slate-700' : ' text-slate-500');
-    preview.textContent = c.lastText || '';
+    const lastFailed = Number(c.lastEventType) === EVENT_FAILED;
+    preview.className = 'text-sm truncate mt-0.5'
+      + (lastFailed ? ' text-red-600' : (isUnread ? ' font-semibold text-slate-700' : ' text-slate-500'));
+    preview.textContent = (lastFailed ? MESSAGE_STATUS[EVENT_FAILED].icon + ' ' : '') + (c.lastText || '');
 
     content.appendChild(topRow);
     content.appendChild(preview);
@@ -394,10 +425,15 @@ async function openConversation(customer, skipRead) {
     wrapper.className = 'flex flex-col max-w-[75%] md:max-w-[65%] msg-anim'
       + (isInbound ? ' items-start self-start' : ' items-end self-end');
 
+    const isFailed = Number(m.eMessageEventTypeID) === EVENT_FAILED;
+
     const bubble = document.createElement('div');
     bubble.className = isInbound
       ? 'bg-white border border-slate-100 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm text-slate-800 shadow-sm'
       : 'bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm shadow-sm';
+    // A failed send keeps its bubble colour but gains a red outline, so it reads
+    // as undelivered at a glance instead of only via the small status icon.
+    if (isFailed) bubble.className += ' ring-2 ring-red-400';
 
     // Message text
     if (m.text) {
@@ -420,9 +456,33 @@ async function openConversation(customer, skipRead) {
     timeEl.className = 'text-[11px] text-slate-400';
     timeEl.textContent = formatTime(m.dtCreated);
 
-    const iconEl = document.createElement('span');
+    const status = statusForEvent(m.eMessageEventTypeID);
+    let detailEl = null;
+
+    // Failures get a label next to the icon, the reason on hover, and a tap
+    // target that reveals the reason inline for touch devices with no hover.
+    const iconEl = document.createElement(isFailed ? 'button' : 'span');
     iconEl.className = 'text-[11px]';
-    iconEl.textContent = iconForEvent(m.eMessageEventTypeID);
+    iconEl.textContent = status.icon;
+    iconEl.title = status.label;
+
+    if (isFailed) {
+      const detail = failureDetail(m);
+      iconEl.type = 'button';
+      iconEl.className = 'text-[11px] font-semibold text-red-600 hover:text-red-700 transition-colors';
+      iconEl.textContent = status.icon + ' ' + status.label;
+      iconEl.title = detail;
+      iconEl.setAttribute('aria-label', status.label + ': ' + detail);
+
+      detailEl = document.createElement('div');
+      detailEl.className = 'hidden mt-1 px-3 py-2 rounded-xl bg-red-50 border border-red-200 text-[11px] text-red-700';
+      detailEl.textContent = detail;
+
+      iconEl.onclick = (ev) => {
+        ev.stopPropagation();
+        detailEl.classList.toggle('hidden');
+      };
+    }
 
     const delBtn = document.createElement('button');
     delBtn.className = 'text-[11px] text-slate-300 hover:text-red-400 transition-colors ml-1';
@@ -449,6 +509,7 @@ async function openConversation(customer, skipRead) {
 
     wrapper.appendChild(bubble);
     wrapper.appendChild(meta);
+    if (detailEl) wrapper.appendChild(detailEl);
     box.appendChild(wrapper);
   }
 
@@ -794,13 +855,26 @@ document.getElementById('text').addEventListener('input', function () {
   saveDraftMediaIds();
 });
 
-/* Send on Enter (Shift+Enter for newline) */
+/* On a soft keyboard the Return key is the only way to type a line break, and
+   the send button is right there — so Return must never submit. Hardware
+   keyboards keep Enter-to-send with Shift/Ctrl/Cmd+Enter for a newline. */
+function hasSoftKeyboard() {
+  return window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+}
+
 document.getElementById('text').addEventListener('keydown', function (e) {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    document.getElementById('compose').requestSubmit();
-  }
+  if (e.key !== 'Enter') return;
+  if (e.isComposing || e.keyCode === 229) return; // IME candidate selection
+  if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (hasSoftKeyboard()) return;
+  e.preventDefault();
+  document.getElementById('compose').requestSubmit();
 });
+
+/* Customer number field: reformat on every input so pasted numbers keep all
+   ten digits regardless of how they were formatted (issues #2, #6). */
+const customerInputEl = document.getElementById('customerInput');
+customerInputEl.addEventListener('input', () => formatPhoneField(customerInputEl));
 
 /* ── Business phone identity ── */
 
