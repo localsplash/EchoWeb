@@ -31,7 +31,6 @@ describe('parseMicrosoftIdToken', () => {
       sub: 'sub-123',
       email: 'ada@contoso.com',
       name: 'Ada Lovelace',
-      tenantId: 'tenant-789',
     });
   });
 

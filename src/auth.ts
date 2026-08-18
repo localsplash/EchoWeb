@@ -34,8 +34,6 @@ export interface OAuthUserInfo {
   name: string;
   /** Verified domain, when the provider vouches for one (Google Workspace `hd`). */
   hd?: string;
-  /** Entra directory the account lives in. Absent for Google. */
-  tenantId?: string;
 }
 
 // ─── Session helpers ──────────────────────────────────────────────────────────
@@ -323,8 +321,6 @@ export async function exchangeMicrosoftCode(
 
 interface MicrosoftIdTokenClaims {
   sub?: string;
-  oid?: string;
-  tid?: string;
   name?: string;
   email?: string;
   preferred_username?: string;
@@ -365,7 +361,7 @@ export function parseMicrosoftIdToken(idToken: string): OAuthUserInfo | null {
   const email = candidate.includes('@') ? candidate.toLowerCase() : '';
   if (!email) return null;
 
-  return { sub: claims.sub, email, name: claims.name ?? email, tenantId: claims.tid };
+  return { sub: claims.sub, email, name: claims.name ?? email };
 }
 
 // ─── UISP SSO one-time code ───────────────────────────────────────────────────

@@ -26,11 +26,6 @@ const envSchema = z.object({
   // Microsoft accounts — the parallel to Google accepting any Google account.
   // A directory (tenant) GUID here would restrict sign-in to that tenant alone.
   MICROSOFT_TENANT: z.string().default('common'),
-  // Wisp's own directory. Super-admin is granted on an @wisp.net address, and
-  // Entra's `email` claim is tenant-controlled — so with MICROSOFT_TENANT set to
-  // 'common', any tenant on earth could mint one. Microsoft sign-ins therefore
-  // only reach the super-admin branch when the token came from this directory.
-  MICROSOFT_WISP_TENANT_ID: z.string().default('ae0d317b-49e2-46b9-84e7-964f8b1dedbb'),
 
   // UISP integration
   UISP_BASE_URL: z.string().url().default('https://my.wisp.net'),
