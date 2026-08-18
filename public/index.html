@@ -96,7 +96,8 @@
         <!-- Title -->
         <div id="threadTitle" class="flex-1 font-semibold text-slate-800 truncate">Select a conversation</div>
         <!-- Customer input (drafting new) -->
-        <input id="customerInput" class="hidden flex-1 px-3 py-2 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none text-sm" inputmode="numeric" maxlength="11" placeholder="10-digit customer number" />
+        <!-- No maxlength: it counts pasted punctuation and letters, which truncated real numbers. app.js reformats on input instead. -->
+        <input id="customerInput" class="hidden flex-1 px-3 py-2 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none text-sm" inputmode="tel" autocomplete="tel" enterkeyhint="next" placeholder="(555) 123-4567" />
         <!-- Menu -->
         <div class="relative">
           <button id="threadMenu" class="hidden p-2 rounded-lg hover:bg-slate-100 transition-colors" onclick="toggleThreadMenu(event)">
@@ -143,7 +144,8 @@
         </button>
         <input type="file" id="fileInput" multiple hidden
           accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.zip,.rar" />
-        <textarea id="text" rows="1" placeholder="Type a message..." maxlength="2048"
+        <!-- enterkeyhint="enter" asks soft keyboards for the bent-arrow Return key rather than a Send/Go key. -->
+        <textarea id="text" rows="1" placeholder="Type a message..." maxlength="2048" enterkeyhint="enter"
           class="flex-1 resize-none rounded-2xl border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 px-4 py-2.5 text-sm leading-relaxed max-h-32 overflow-y-auto outline-none transition-all"></textarea>
         <button type="submit" class="flex-shrink-0 w-10 h-10 rounded-full bg-blue-600 hover:bg-blue-700 active:bg-blue-800 flex items-center justify-center transition-colors">
           <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">

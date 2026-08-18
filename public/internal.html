@@ -44,10 +44,9 @@
       </label>
       <input
         name="businessNumber"
-        inputmode="numeric"
+        inputmode="tel"
+        autocomplete="tel"
         pattern="\(\d{3}\) \d{3}-\d{4}"
-        maxlength="14"
-        minlength="14"
         required
         autofocus
         placeholder="(714) 555-1234"
@@ -90,8 +89,13 @@
   </div>
 
   <script>
+    // Keep only digits, drop a leading US country code, then reformat. Pasting
+    // "WISP 7146403939" or "+1 (714) 640-3939" both leave ten digits intact —
+    // the field deliberately has no maxlength, which would count the letters.
     function fmt(el) {
-      const d = String(el.value || '').replace(/\D/g, '').slice(0, 10);
+      let d = String(el.value || '').replace(/\D/g, '');
+      if (d.length === 11 && d.startsWith('1')) d = d.slice(1);
+      d = d.slice(0, 10);
       if (d.length <= 3) el.value = d;
       else if (d.length <= 6) el.value = `(${d.slice(0,3)}) ${d.slice(3)}`;
       else el.value = `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`;
