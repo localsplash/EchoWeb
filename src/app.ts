@@ -13,39 +13,25 @@ import {
   clearSessionCookie,
   deleteSession,
   updateSessionBusinessNumber,
-  buildGoogleAuthUrl,
-  buildMicrosoftAuthUrl,
-  setOAuthStateCookie,
-  clearOAuthStateCookie,
-  getOAuthStateFromRequest,
-  exchangeGoogleCode,
-  getGoogleUserInfo,
-  exchangeMicrosoftCode,
-  parseMicrosoftIdToken,
-  verifySsoCode,
-  consumeNonce,
+  setLoginStateCookie,
+  clearLoginStateCookie,
+  checkLoginState,
   fetchUispClient,
   findUispClientByEmail,
   upsertOrg,
-  findUserByIdentity,
-  findUserByEmail,
-  createUser,
-  ensureIdentity,
+  findUserByIdUserId,
+  ensureUser,
   createMembership,
   getOwnerMembership,
-  listIdentities,
-  getIdentity,
-  deleteIdentity,
-  countIdentities,
+  findActiveMembership,
   adminListAccounts,
   createSuperAdminSession,
   createFullSession,
   generateId,
   type SessionRow,
-  type OAuthState,
-  type OAuthProvider,
-  type OAuthUserInfo,
+  type CrmConfig,
 } from './auth';
+import { IdClient, buildAuthorizeUrl, exchangeCode, type IdTokenResult } from './idClient';
 
 type ApiMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
@@ -122,13 +108,13 @@ async function proxyEchoService(
 // ─── Shared provisioning ──────────────────────────────────────────────────────
 
 /**
- * Resolve (or create) the org and owner for a CRM client, then attach the
- * identity that got us here.
+ * Resolve (or create) the org and owner for a CRM client, then bind the id
+ * user that got us here.
  *
- * Shared by the UISP bridge and by Google sign-in that matched a CRM contact
- * address, so both routes agree on one rule: one org per CRM client, one owner
- * per org. If the org already has an owner, the incoming identity is attached to
- * that user rather than minting a rival owner.
+ * Whatever provider the person used at id, the rule is the same: one org per
+ * CRM client, one owner per org. If the org already has an owner, the
+ * incoming id user is that owner (their Echo projection is updated) rather
+ * than a rival one being minted.
  */
 async function provisionFromCrmClient(
   db: ReturnType<typeof getDb>,
@@ -137,7 +123,8 @@ async function provisionFromCrmClient(
     iBusinessNumber: number | null;
     displayName: string | null;
     contactEmail: string | null;
-    identity: { provider: 'uisp' | 'google' | 'microsoft'; subject: string; email: string | null };
+    iIdUserId: number;
+    email: string | null;
   }
 ): Promise<{ iOrgId: number; iUserId: number; isFirstEntry: boolean }> {
   const { iOrgId } = await upsertOrg(
@@ -147,31 +134,32 @@ async function provisionFromCrmClient(
     params.displayName
   );
 
-  let iUserId = await findUserByIdentity(db, params.identity.provider, params.identity.subject);
+  let iUserId = await findUserByIdUserId(db, params.iIdUserId);
   let isFirstEntry = false;
 
   if (!iUserId) {
     const existingOwner = await getOwnerMembership(db, iOrgId);
-    if (existingOwner) iUserId = existingOwner.iUserId;
+    if (existingOwner) {
+      // The org's owner pre-dates id (or used another login): the id user is
+      // that same person, so bind rather than duplicate.
+      iUserId = existingOwner.iUserId;
+      await db.query(`UPDATE auth_tbl_User SET iIdUserId = ? WHERE iUserId = ?`, [
+        params.iIdUserId,
+        iUserId,
+      ]);
+    }
   }
 
   if (!iUserId) {
-    iUserId = await createUser(
+    iUserId = await ensureUser(
       db,
-      params.identity.email ?? params.contactEmail,
+      params.iIdUserId,
+      params.email ?? params.contactEmail,
       params.displayName
     );
     await createMembership(db, iUserId, iOrgId, 'owner');
     isFirstEntry = true;
   }
-
-  await ensureIdentity(
-    db,
-    iUserId,
-    params.identity.provider,
-    params.identity.subject,
-    params.identity.email ?? params.contactEmail
-  );
 
   return { iOrgId, iUserId, isFirstEntry };
 }
@@ -181,6 +169,7 @@ async function provisionFromCrmClient(
 export function buildApp() {
   const config = loadConfig();
   const db = getDb(config);
+  const idClient = new IdClient(config);
   const logger = pino({ level: config.LOG_LEVEL });
   const app = express();
 
@@ -189,17 +178,25 @@ export function buildApp() {
   app.use(pinoHttp({ logger }));
   app.use(express.static(publicDir, { index: false }));
 
-  // Browser config (media URL, UISP plugin URL, which logins are available).
-  const configJs = `window.ECHO_CONFIG=${JSON.stringify({
-    MEDIA_BASE_URL: config.MEDIA_BASE_URL,
-    UISP_PLUGIN_URL: config.UISP_PLUGIN_URL,
-    // Only the flag — never the client id, which the browser has no use for.
-    MICROSOFT_ENABLED: Boolean(config.MICROSOFT_CLIENT_ID),
-  })};`;
-  app.get('/config.js', (_req, res) => {
+  const echoCallbackUrl = `${config.APP_BASE_URL.replace(/\/+$/, '')}/auth/callback`;
+
+  // Browser config. ID_BASE_URL lets pages link to the identity app for
+  // sign-in method management; it comes from the shared oAuthConfig table.
+  app.get('/config.js', async (_req, res) => {
+    let idBase = '';
+    try {
+      idBase = await idClient.idBaseUrl();
+    } catch {
+      // Settings store unreachable — pages degrade to not showing id links.
+    }
     res.set('Content-Type', 'application/javascript');
     res.set('Cache-Control', 'public, max-age=300');
-    res.send(configJs);
+    res.send(
+      `window.ECHO_CONFIG=${JSON.stringify({
+        MEDIA_BASE_URL: config.MEDIA_BASE_URL,
+        ID_BASE_URL: idBase,
+      })};`
+    );
   });
 
   app.get('/healthz', (_req, res) => {
@@ -208,21 +205,38 @@ export function buildApp() {
 
   // ── Root / login guard ───────────────────────────────────────────────────────
 
-  app.get('/', async (req, res) => {
-    const session = await resolveSession(req);
-    if (!session) {
-      return res.sendFile(path.join(publicDir, 'login.html'));
+  /**
+   * There is no local login page any more. A visitor without a session is
+   * sent to the id app; with a live domain-wide SSO session over there the
+   * round trip is invisible — they bounce straight back with a code.
+   */
+  app.get('/', async (req, res, next) => {
+    try {
+      const session = await resolveSession(req);
+      if (!session) {
+        const idBase = await idClient.idBaseUrl().catch(() => null);
+        if (!idBase) {
+          return res
+            .status(503)
+            .send('Sign-in is temporarily unavailable (identity service not configured).');
+        }
+        const state = generateId(16);
+        setLoginStateCookie(res, state);
+        return res.redirect(buildAuthorizeUrl(idBase, echoCallbackUrl, state));
+      }
+      if (session.bIsSuperAdmin && !session.iBusinessNumber) {
+        // Super-admin has not yet selected a business phone
+        return res.redirect('/internal');
+      }
+      if (!session.iBusinessNumber) {
+        // A real account whose org has no number yet — the messaging UI would be
+        // an empty shell and every API call would 401, so route them to ordering.
+        return res.redirect('/order-echo');
+      }
+      return res.sendFile(path.join(publicDir, 'index.html'));
+    } catch (err) {
+      next(err);
     }
-    if (session.bIsSuperAdmin && !session.iBusinessNumber) {
-      // Super-admin has not yet selected a business phone
-      return res.redirect('/internal');
-    }
-    if (!session.iBusinessNumber) {
-      // A real account whose org has no number yet — the messaging UI would be
-      // an empty shell and every API call would 401, so route them to ordering.
-      return res.redirect('/order-echo');
-    }
-    return res.sendFile(path.join(publicDir, 'index.html'));
   });
 
   // ── Placeholder sub-applications ─────────────────────────────────────────────
@@ -238,414 +252,149 @@ export function buildApp() {
     return res.sendFile(path.join(publicDir, 'order-echo.html'));
   });
 
-  // ── OAuth sign-in (Google, Microsoft) ────────────────────────────────────────
+  // ── id callback ──────────────────────────────────────────────────────────────
 
   /**
-   * A wisp.net address is what grants super-admin, so it has to mean something,
-   * and Google is the only provider trusted to assert one — it verifies the
-   * Workspace domain it reports. Entra does not: with a 'common' authority the
-   * address is whatever the user's own tenant put there, so any directory on
-   * earth could mint an @wisp.net user. wisp.net staff stay on Google, so
-   * Microsoft never reaches this branch.
-   *
-   * A wisp.net person who signs in with Microsoft is therefore treated as an
-   * ordinary user; having no membership, they are turned away rather than
-   * silently downgraded into someone else's org.
+   * The id app redirects here with a one-time code after the user has
+   * authenticated (by whatever provider id offered). Echo's job is purely
+   * membership: map the id user onto an org, provisioning from the UISP CRM
+   * when this is their first entry.
    */
-  function isWispStaff(provider: OAuthProvider, userInfo: OAuthUserInfo): boolean {
-    if (provider !== 'google') return false;
-    return userInfo.email?.toLowerCase().endsWith('@wisp.net') || userInfo.hd === 'wisp.net';
-  }
-
-  /**
-   * Validate the returned OAuth state against the cookie we set before leaving.
-   * Returns an error path on failure so callers stay a straight line.
-   */
-  function checkOAuthState(
-    req: express.Request,
-    provider: OAuthProvider
-  ): { state: OAuthState } | { error: string } {
-    const stored = getOAuthStateFromRequest(req);
-    if (!stored) return { error: '/?auth_error=invalid_state' };
-
-    // Both providers share one state cookie. Refusing a state minted for the
-    // other keeps an abandoned "link Google" attempt from turning a later
-    // Microsoft sign-in into a link against that stale session.
-    if (stored.provider !== provider) return { error: '/?auth_error=invalid_state' };
-
-    let returned: OAuthState;
+  app.get('/auth/callback', async (req, res, next) => {
     try {
-      returned = JSON.parse(
-        Buffer.from(String(req.query.state ?? ''), 'base64url').toString('utf8')
-      ) as OAuthState;
-    } catch {
-      return { error: '/?auth_error=invalid_state' };
-    }
-    if (stored.csrf !== returned.csrf) return { error: '/?auth_error=csrf_mismatch' };
+      clearLoginStateCookie(res);
 
-    return { state: stored };
-  }
+      const code = String(req.query.code ?? '');
+      const state = String(req.query.state ?? '');
+      if (!code) return res.redirect('/?auth_error=missing_code');
+      if (!checkLoginState(req, state)) {
+        // Neither our own round trip nor an id-initiated SSO entry.
+        return res.status(400).send('Login state mismatch — please try signing in again.');
+      }
+
+      const settings = await idClient.getSettings();
+      const idBase = await idClient.idBaseUrl();
+      const clientSecret = settings.ID_CLIENT_SECRET;
+      if (!clientSecret) {
+        logger.error('[auth] oAuthConfig ID_CLIENT_SECRET is not set');
+        return res.status(503).send('Sign-in is temporarily unavailable.');
+      }
+
+      const result = await exchangeCode(idBase, {
+        code,
+        redirectUri: echoCallbackUrl,
+        clientSecret,
+      });
+      if (!result) return res.redirect('/?auth_error=code_rejected');
+
+      return res.redirect(await completeLogin(res, result, settings));
+    } catch (err) {
+      next(err);
+    }
+  });
 
   /**
-   * Everything that happens once a provider has told us who the user is.
-   *
-   * Google and Microsoft differ only in how the identity is obtained, so the
-   * super-admin, link and login branches live here rather than once per
-   * provider — one set of rules about who gets an account and who owns an org.
-   *
-   * Sets the session cookie as a side effect; returns where to send the user.
+   * Everything that happens once id has told us who the user is. Sets the
+   * session cookie as a side effect; returns where to send the browser.
    */
-  async function completeOAuthLogin(
+  async function completeLogin(
     res: express.Response,
-    provider: OAuthProvider,
-    userInfo: OAuthUserInfo,
-    storedState: OAuthState
+    result: IdTokenResult,
+    settings: Record<string, string>
   ): Promise<string> {
-    // ── Super-admin path ───────────────────────────────────────────────────
-    if (isWispStaff(provider, userInfo)) {
-      let iUserId = await findUserByIdentity(db, provider, userInfo.sub);
-      if (!iUserId) {
-        // Auto-link by address: the provider has vouched for this one.
-        iUserId = await findUserByEmail(db, userInfo.email);
-        if (!iUserId) {
-          iUserId = await createUser(db, userInfo.email, userInfo.name);
-        }
-        await ensureIdentity(db, iUserId, provider, userInfo.sub, userInfo.email);
-      }
+    const { user, identity, identities } = result;
+
+    // ── Super System Admin (id verified the domain) ─────────────────────────
+    if (user.superAdmin) {
+      const iUserId = await ensureUser(db, user.iUserId, user.email, user.displayName);
       const sessionId = await createSuperAdminSession(db, iUserId);
       setSessionCookie(res, sessionId);
       return '/internal';
     }
 
-    // ── Link path: attach this identity to the signed-in account ───────────
-    if (storedState.context === 'link' && storedState.linkSessionId) {
-      const linkSession = await getSession(db, storedState.linkSessionId);
-      if (!linkSession?.iUserId) return '/?auth_error=link_expired';
-
-      const back = storedState.returnTo ?? '/';
-
-      // If this account is already an identity, it must be this user's;
-      // otherwise two people would share one login.
-      const owner = await findUserByIdentity(db, provider, userInfo.sub);
-      if (owner && owner !== linkSession.iUserId) {
-        return `${back}?link_error=already_linked`;
-      }
-
-      await ensureIdentity(db, linkSession.iUserId, provider, userInfo.sub, userInfo.email);
-
-      // Record the address if we didn't have one.
-      await db.query(
-        `UPDATE auth_tbl_User SET email = COALESCE(email, ?) WHERE iUserId = ?`,
-        [userInfo.email, linkSession.iUserId]
-      );
-
-      return `${back}?linked=${provider}`;
+    // ── Known Echo user ─────────────────────────────────────────────────────
+    const existing = await findUserByIdUserId(db, user.iUserId);
+    if (existing) {
+      const membership = await findActiveMembership(db, existing);
+      if (!membership) return '/?auth_error=no_membership';
+      const sessionId = await createFullSession(db, {
+        iUserId: existing,
+        iOrgId: membership.iOrgId,
+        iBusinessNumber: membership.iBusinessNumber,
+        role: membership.role,
+      });
+      setSessionCookie(res, sessionId);
+      return membership.iBusinessNumber ? '/' : '/order-echo';
     }
 
-    // ── Regular login path ─────────────────────────────────────────────────
-    const iUserId = await findUserByIdentity(db, provider, userInfo.sub);
+    // ── First entry: provision from the UISP CRM ────────────────────────────
+    const crm: CrmConfig = {
+      UISP_BASE_URL: settings.UISP_BASE_URL ?? '',
+      UISP_CRM_APP_KEY_READ: settings.UISP_CRM_APP_KEY_READ ?? '',
+    };
+    if (!crm.UISP_BASE_URL || !crm.UISP_CRM_APP_KEY_READ) {
+      logger.error('[auth] UISP CRM settings missing from oAuthConfig');
+      return '/?auth_error=no_account';
+    }
 
-    if (!iUserId) {
-      // Unknown to Echo. Before turning them away, ask the CRM whether this
-      // address belongs to a subscriber — a match on a CRM contact is the
-      // basis for binding the account.
-      let crmClient: Awaited<ReturnType<typeof findUispClientByEmail>>;
+    // A uisp identity carries the CRM clientId as its subject — the strongest
+    // possible binding, used when present. Otherwise fall back to matching a
+    // CRM contact by the verified address id gave us.
+    const uispIdentity =
+      identity.provider === 'uisp'
+        ? identity
+        : (identities.find((i) => i.provider === 'uisp') ?? null);
+
+    let crmClient: Awaited<ReturnType<typeof findUispClientByEmail>> = null;
+    if (uispIdentity?.subject) {
+      crmClient = await fetchUispClient(crm, uispIdentity.subject);
+      if (!crmClient) {
+        logger.warn(`[auth] Could not fetch UISP client ${uispIdentity.subject}`);
+        return '/?auth_error=uisp_fetch_failed';
+      }
+    } else if (user.email) {
       try {
-        crmClient = await findUispClientByEmail(config, userInfo.email);
+        crmClient = await findUispClientByEmail(crm, user.email);
       } catch (lookupErr) {
         // Couldn't ask — don't guess. Sending them to sign-up here would
         // invite a duplicate org for an existing subscriber.
         logger.error({ err: lookupErr }, '[auth] CRM email lookup failed');
         return '/?auth_error=no_account';
       }
-
-      // Not a subscriber at all → they need to sign up.
-      if (!crmClient) return '/sign-up';
-
-      const number = crmClient.hostedPulseNumber
-        ? parseInt(crmClient.hostedPulseNumber, 10)
-        : null;
-
-      const { iOrgId, iUserId: provisionedUserId } = await provisionFromCrmClient(db, {
-        clientId: crmClient.clientId,
-        iBusinessNumber: number,
-        displayName: crmClient.displayName,
-        contactEmail: crmClient.email,
-        identity: { provider, subject: userInfo.sub, email: userInfo.email },
-      });
-
-      const newSession = await createFullSession(db, {
-        iUserId: provisionedUserId,
-        iOrgId,
-        iBusinessNumber: number,
-        role: 'owner',
-      });
-      setSessionCookie(res, newSession);
-
-      // A subscriber with no hostedPulseNumber is a real org that simply has
-      // no number yet — keep the account and send them to buy one.
-      logger.info(
-        `[auth] matched ${provider} ${userInfo.email} to CRM client ${crmClient.clientId}` +
-        (number ? ` (number ${number})` : ' (no number yet)')
-      );
-      return number ? '/' : '/order-echo';
     }
 
-    // Find membership (user should belong to at least one org)
-    const [memberRows] = await db.query<import('mysql2/promise').RowDataPacket[]>(
-      `SELECT m.iUserId, m.iOrgId, m.role, o.iBusinessNumber
-       FROM auth_tbl_Membership m
-       INNER JOIN auth_tbl_Org o ON o.iOrgId = m.iOrgId
-       WHERE m.iUserId = ? AND m.status = 'active'
-       ORDER BY FIELD(m.role,'owner','admin','member'), m.dtCreated ASC
-       LIMIT 1`,
-      [iUserId]
-    );
+    // Not a subscriber at all → they need to sign up.
+    if (!crmClient) return '/sign-up';
 
-    if (!memberRows.length) return '/?auth_error=no_membership';
+    const number = crmClient.hostedPulseNumber
+      ? parseInt(crmClient.hostedPulseNumber, 10)
+      : null;
 
-    const member = memberRows[0];
+    const { iOrgId, iUserId } = await provisionFromCrmClient(db, {
+      clientId: crmClient.clientId,
+      iBusinessNumber: number,
+      displayName: crmClient.displayName,
+      contactEmail: crmClient.email,
+      iIdUserId: user.iUserId,
+      email: user.email,
+    });
+
     const sessionId = await createFullSession(db, {
       iUserId,
-      iOrgId: member.iOrgId as number,
-      iBusinessNumber: member.iBusinessNumber as number,
-      role: member.role as 'owner' | 'admin' | 'member',
+      iOrgId,
+      iBusinessNumber: number,
+      role: 'owner',
     });
     setSessionCookie(res, sessionId);
-    return '/';
-  }
 
-  // ── Google OAuth ─────────────────────────────────────────────────────────────
-
-  // Plain sign-in only. Account linking goes through /auth/google/link, which
-  // derives the target user from the server-side session — the context is never
-  // taken from the request.
-  app.get('/auth/google', async (_req, res) => {
-    const state: OAuthState = { csrf: generateId(16), context: 'login', provider: 'google' };
-    setOAuthStateCookie(res, state);
-    return res.redirect(buildGoogleAuthUrl(config, state));
-  });
-
-  app.get('/auth/google/callback', async (req, res, next) => {
-    try {
-      clearOAuthStateCookie(res);
-
-      if (req.query.error) return res.redirect('/?auth_error=google_denied');
-      const code = req.query.code as string;
-      if (!code) return res.redirect('/?auth_error=missing_code');
-
-      const checked = checkOAuthState(req, 'google');
-      if ('error' in checked) return res.redirect(checked.error);
-
-      const tokens = await exchangeGoogleCode(config, code);
-      if (!tokens?.access_token) return res.redirect('/?auth_error=token_exchange_failed');
-
-      const userInfo = await getGoogleUserInfo(tokens.access_token);
-      if (!userInfo?.sub) return res.redirect('/?auth_error=userinfo_failed');
-
-      return res.redirect(await completeOAuthLogin(res, 'google', userInfo, checked.state));
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  // ── Microsoft (Entra ID) OAuth ───────────────────────────────────────────────
-
-  app.get('/auth/microsoft', async (_req, res) => {
-    if (!config.MICROSOFT_CLIENT_ID) return res.redirect('/?auth_error=microsoft_not_configured');
-    const state: OAuthState = { csrf: generateId(16), context: 'login', provider: 'microsoft' };
-    setOAuthStateCookie(res, state);
-    return res.redirect(buildMicrosoftAuthUrl(config, state));
-  });
-
-  app.get('/auth/microsoft/callback', async (req, res, next) => {
-    try {
-      clearOAuthStateCookie(res);
-
-      if (req.query.error) return res.redirect('/?auth_error=microsoft_denied');
-      const code = req.query.code as string;
-      if (!code) return res.redirect('/?auth_error=missing_code');
-
-      const checked = checkOAuthState(req, 'microsoft');
-      if ('error' in checked) return res.redirect(checked.error);
-
-      const tokens = await exchangeMicrosoftCode(config, code);
-      if (!tokens?.id_token) return res.redirect('/?auth_error=token_exchange_failed');
-
-      // Microsoft returns the profile in the id_token itself, so there is no
-      // second userinfo round-trip as there is for Google.
-      const userInfo = parseMicrosoftIdToken(tokens.id_token);
-      if (!userInfo?.sub) return res.redirect('/?auth_error=userinfo_failed');
-
-      return res.redirect(await completeOAuthLogin(res, 'microsoft', userInfo, checked.state));
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  // ── UISP SSO Callback ────────────────────────────────────────────────────────
-  // The UISP bridge plugin redirects here after verifying the client session.
-  // ?code=<base64url-payload>&sig=<hmac-hex>
-
-  app.get('/sso/callback', async (req, res, next) => {
-    try {
-      const code = req.query.code as string;
-      const sig = req.query.sig as string;
-
-      if (!code || !sig) return res.redirect('/?auth_error=missing_sso_params');
-
-      if (!config.UISP_SSO_SECRET) {
-        logger.error('[sso] UISP_SSO_SECRET not configured');
-        return res.redirect('/?auth_error=sso_not_configured');
-      }
-
-      const payload = verifySsoCode(config, code, sig);
-      if (!payload) return res.redirect('/?auth_error=invalid_sso_code');
-
-      // Single-use nonce guard
-      const nonceOk = await consumeNonce(db, payload.nonce, payload.exp);
-      if (!nonceOk) return res.redirect('/?auth_error=sso_replay');
-
-      const clientId = payload.clientId;
-
-      // Fetch the CRM client to check hostedPulseNumber
-      const uispClient = await fetchUispClient(config, clientId);
-      if (!uispClient) {
-        logger.warn(`[sso] Could not fetch UISP client ${clientId}`);
-        return res.redirect('/?auth_error=uisp_fetch_failed');
-      }
-
-      if (!uispClient.hostedPulseNumber) {
-        // Client has no Echo number configured
-        return res.sendFile(path.join(publicDir, 'no-access.html'));
-      }
-
-      const iBusinessNumber = parseInt(uispClient.hostedPulseNumber, 10);
-
-      // The bridge has already proven who this is, so the UISP login is an
-      // identity in its own right. No further credential is required.
-      const { iOrgId, iUserId, isFirstEntry } = await provisionFromCrmClient(db, {
-        clientId,
-        iBusinessNumber,
-        displayName: uispClient.displayName,
-        contactEmail: uispClient.email,
-        identity: { provider: 'uisp', subject: clientId, email: uispClient.email },
-      });
-      if (isFirstEntry) {
-        logger.info(`[sso] Provisioned org ${iOrgId} owner ${iUserId} from UISP client ${clientId}`);
-      }
-
-      const sessionId = await createFullSession(db, {
-        iUserId,
-        iOrgId,
-        iBusinessNumber,
-        role: 'owner',
-      });
-      setSessionCookie(res, sessionId);
-
-      // Offer Google linking once, as a convenience — never as a gate.
-      return res.redirect(isFirstEntry ? '/welcome' : '/');
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  // ── Post-provisioning welcome ────────────────────────────────────────────────
-
-  // Shown once after a UISP client's first entry. Linking Google here is purely
-  // a convenience so they can sign in without going through the ISP portal;
-  // skipping it leaves a fully working account.
-  app.get('/welcome', async (req, res) => {
-    const session = await resolveSession(req);
-    if (!session?.iUserId) return res.redirect('/');
-    return res.sendFile(path.join(publicDir, 'welcome.html'));
-  });
-
-  // Link an additional identity to the already-signed-in user. A user may hold
-  // several of either provider; any of them signs them in.
-  async function startLink(
-    req: express.Request,
-    res: express.Response,
-    provider: OAuthProvider
-  ) {
-    const session = await resolveSession(req);
-    if (!session?.iUserId) return res.redirect('/');
-
-    // Fixed allowlist — never redirect to a caller-supplied URL.
-    const allowed = ['/', '/settings', '/welcome'];
-    const requested = String(req.query.return ?? '/');
-    const returnTo = allowed.includes(requested) ? requested : '/';
-
-    const state: OAuthState = {
-      csrf: generateId(16),
-      context: 'link',
-      provider,
-      linkSessionId: session.sSessionId,
-      returnTo,
-    };
-    setOAuthStateCookie(res, state);
-    return res.redirect(
-      provider === 'google'
-        ? buildGoogleAuthUrl(config, state)
-        : buildMicrosoftAuthUrl(config, state)
+    // A subscriber with no hostedPulseNumber is a real org that simply has
+    // no number yet — keep the account and send them to buy one.
+    logger.info(
+      `[auth] matched id user ${user.iUserId} to CRM client ${crmClient.clientId}` +
+        (number ? ` (number ${number})` : ' (no number yet)')
     );
+    return number ? '/' : '/order-echo';
   }
-
-  app.get('/auth/google/link', (req, res) => startLink(req, res, 'google'));
-
-  app.get('/auth/microsoft/link', (req, res) => {
-    if (!config.MICROSOFT_CLIENT_ID) return res.redirect('/?auth_error=microsoft_not_configured');
-    return startLink(req, res, 'microsoft');
-  });
-
-  // ── Sign-in methods (own account) ────────────────────────────────────────────
-
-  app.get('/api/identities', async (req, res, next) => {
-    try {
-      const session = await resolveSession(req);
-      if (!session?.iUserId) return res.status(401).json({ error: 'Not logged in' });
-
-      const rows = await listIdentities(db, session.iUserId);
-      return res.json({
-        items: rows.map((r) => ({
-          iIdentityId: r.iIdentityId,
-          provider: r.provider,
-          // The Google `sub` is opaque and meaningless to a user, so label by
-          // address; fall back to the CRM client id for the ISP binding.
-          label: r.email ?? (r.provider === 'uisp' ? `CRM client ${r.subject}` : null),
-          dtCreated: r.dtCreated,
-          removable: r.provider !== 'uisp',
-        })),
-      });
-    } catch (error) { next(error); }
-  });
-
-  app.delete('/api/identities/:id', async (req, res, next) => {
-    try {
-      const session = await resolveSession(req);
-      if (!session?.iUserId) return res.status(401).json({ error: 'Not logged in' });
-
-      const id = Number(req.params.id);
-      const identity = await getIdentity(db, id);
-      if (!identity || identity.iUserId !== session.iUserId) {
-        // Don't disclose whether the id exists on someone else's account.
-        return res.status(404).json({ error: 'Not found' });
-      }
-      if (identity.provider === 'uisp') {
-        return res.status(400).json({
-          error: 'Your ISP sign-in is managed by your provider and cannot be removed here.',
-        });
-      }
-      if ((await countIdentities(db, session.iUserId)) <= 1) {
-        return res.status(400).json({
-          error: 'This is your only sign-in method — link another before removing it.',
-        });
-      }
-
-      await deleteIdentity(db, id);
-      return res.json({ ok: true });
-    } catch (error) { next(error); }
-  });
 
   // ── Super-admin (internal) ───────────────────────────────────────────────────
 
@@ -654,29 +403,6 @@ export function buildApp() {
       const session = await resolveSession(req);
       if (!session?.bIsSuperAdmin) return res.status(403).json({ error: 'Forbidden' });
       return res.json({ items: await adminListAccounts(db) });
-    } catch (error) { next(error); }
-  });
-
-  app.delete('/api/admin/identities/:id', async (req, res, next) => {
-    try {
-      const session = await resolveSession(req);
-      if (!session?.bIsSuperAdmin) return res.status(403).json({ error: 'Forbidden' });
-
-      const id = Number(req.params.id);
-      const identity = await getIdentity(db, id);
-      if (!identity) return res.status(404).json({ error: 'Not found' });
-
-      // Same floor as the self-service path: never strip a user's last way in.
-      // A uisp identity removed here is re-attached on the next bridge entry.
-      if ((await countIdentities(db, identity.iUserId)) <= 1) {
-        return res.status(400).json({
-          error: 'That is the user\'s only sign-in method — removing it would lock them out.',
-        });
-      }
-
-      await deleteIdentity(db, id);
-      logger.warn(`[admin] user ${session.iUserId} unlinked identity ${id} (${identity.provider}) from user ${identity.iUserId}`);
-      return res.json({ ok: true });
     } catch (error) { next(error); }
   });
 
@@ -708,11 +434,17 @@ export function buildApp() {
 
   // ── Logout ───────────────────────────────────────────────────────────────────
 
+  /**
+   * Ends the Echo session AND the domain-wide id session. Clearing only the
+   * local cookie would look broken: the next visit to / would silently sign
+   * the user straight back in off the id SSO cookie.
+   */
   app.post('/logout', async (req, res) => {
     const session = await resolveSession(req);
     if (session) await deleteSession(db, session.sSessionId);
     clearSessionCookie(res);
-    return res.redirect('/');
+    const idBase = await idClient.idBaseUrl().catch(() => null);
+    return res.redirect(idBase ? `${idBase}/logout` : '/');
   });
 
   // ── Settings page ────────────────────────────────────────────────────────────

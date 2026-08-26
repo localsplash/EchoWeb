@@ -37,9 +37,12 @@
         </div>
         <div>
           <h1 class="text-lg font-bold text-slate-900 tracking-tight leading-tight">Account Associations</h1>
-          <p class="text-xs text-slate-500">Orgs, users, identities and business numbers</p>
+          <p class="text-xs text-slate-500">Orgs, users and business numbers</p>
         </div>
       </div>
+      <a id="idAdminLink" href="#" class="hidden ml-auto text-xs font-semibold text-blue-600 hover:text-blue-700">
+        Identity admin (sign-in methods) →
+      </a>
     </div>
 
     <!-- Search -->
@@ -55,21 +58,12 @@
 
   <div id="toast" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 px-5 py-3 rounded-2xl text-sm font-medium shadow-lg z-50"></div>
 
+  <script src="/config.js"></script>
   <script>
     let ORGS = [];
 
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => (
       { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
-
-    const PROVIDER = {
-      google: 'Google', microsoft: 'Microsoft', uisp: 'UISP', magic_link: 'Email link',
-    };
-    const PROVIDER_STYLE = {
-      google:     'bg-blue-50 text-blue-700',
-      microsoft:  'bg-indigo-50 text-indigo-700',
-      uisp:       'bg-amber-50 text-amber-700',
-      magic_link: 'bg-slate-100 text-slate-600',
-    };
 
     function showToast(msg, ok = true) {
       const el = document.getElementById('toast');
@@ -102,7 +96,7 @@
       if (!q) return true;
       const hay = [
         org.orgName, org.uispClientId, org.iBusinessNumber,
-        ...org.users.flatMap(u => [u.email, u.displayName, ...u.identities.map(i => i.email || i.subject)]),
+        ...org.users.flatMap(u => [u.email, u.displayName]),
       ].join(' ').toLowerCase();
       return hay.includes(q);
     }
@@ -146,23 +140,10 @@
                       u.role === 'owner' ? 'bg-green-50 text-green-700' : 'bg-slate-100 text-slate-600'
                     }">${esc(u.role)}</span>` : ''}
                     <span class="text-[11px] text-slate-400">user #${u.iUserId}</span>
+                    ${u.iIdUserId != null
+                      ? `<span class="text-[11px] text-slate-400">· id #${u.iIdUserId}</span>`
+                      : '<span class="text-[11px] text-amber-600">· not signed in via id yet</span>'}
                   </div>
-                </div>
-                <div class="space-y-1">
-                  ${u.identities.length ? u.identities.map(i => `
-                    <div class="flex items-center justify-between gap-3 bg-slate-50 rounded-lg px-3 py-1.5">
-                      <div class="flex items-center gap-2 min-w-0">
-                        <span class="px-1.5 py-0.5 rounded text-[11px] font-semibold ${PROVIDER_STYLE[i.provider] || 'bg-slate-100 text-slate-600'}">
-                          ${esc(PROVIDER[i.provider] || i.provider)}
-                        </span>
-                        <span class="text-xs text-slate-600 truncate">${esc(i.email || i.subject)}</span>
-                      </div>
-                      <button onclick="unlink(${i.iIdentityId}, '${esc(i.email || i.subject)}')"
-                        class="text-[11px] font-semibold text-red-600 hover:bg-red-50 px-2 py-1 rounded transition-colors flex-shrink-0">
-                        Unlink
-                      </button>
-                    </div>`).join('')
-                  : '<div class="text-xs text-slate-400 px-1">No identities — this user cannot sign in.</div>'}
                 </div>
               </div>`).join('')
           : '<div class="px-5 py-3 border-t border-slate-100 text-xs text-slate-400">No members.</div>';
@@ -175,17 +156,15 @@
       }).join('');
     }
 
-    async function unlink(id, label) {
-      if (!confirm(`Unlink "${label}"?\n\nThat sign-in method will stop working for this user.`)) return;
-      const r = await fetch(`/api/admin/identities/${id}`, { method: 'DELETE' });
-      const data = await r.json().catch(() => ({}));
-      if (r.ok && data.ok) {
-        showToast('Identity unlinked.');
-        await load();
-      } else {
-        showToast(data.error || 'Could not unlink that identity.', false);
+    // Sign-in methods live in the id app now; deep-link its admin console.
+    (function initIdAdminLink() {
+      const base = window.ECHO_CONFIG?.ID_BASE_URL;
+      const a = document.getElementById('idAdminLink');
+      if (base && a) {
+        a.href = base.replace(/\/+$/, '') + '/admin';
+        a.classList.remove('hidden');
       }
-    }
+    })();
 
     load();
   </script>

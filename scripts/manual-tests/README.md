@@ -1,8 +1,12 @@
 # Manual tests
 
-These run against a **live stack** (EchoWeb + database + the UISP CRM). They are
-not unit tests and are deliberately excluded from `npm test` — they mutate real
-rows and call the CRM API.
+These run against a **live stack**. They are not unit tests and are
+deliberately excluded from `npm test` — they mutate real rows and call
+external APIs.
+
+Sign-in, identities, and the UISP SSO bridge moved to the `id` app
+(id.<parent-domain>); their manual tests moved with them. What remains here
+is Echo-specific surface only.
 
 Credentials come from the environment; nothing is hardcoded. Source the
 orchestrator env first:
@@ -11,19 +15,5 @@ orchestrator env first:
 set -a; . /opt/echo/EchoOrchestrator/.env; set +a
 cd /opt/echo/EchoWeb/scripts/manual-tests
 
-node sso-bridge.js        # UISP bridge: signing, replay, first vs return entry
-node identity.js          # sign-in methods + super-admin overview, incl. authz boundaries
-node crm-match.js         # Google sign-in matched against a CRM contact email
+node env.js               # sanity-check the environment wiring
 ```
-
-Optional overrides: `ECHO_BASE_URL` (default `http://127.0.0.1:3160`),
-`DB_HOST_LOCAL` / `DB_PORT_LOCAL` (default `127.0.0.1:13306`, the published port).
-
-## Notes
-
-- `sso-bridge.js` takes `TEST_CLIENT_ID` (default `1`). Its "first entry" case
-  only passes for a CRM client that has **no org in Echo yet** — once provisioned
-  that client correctly returns to `/` instead of `/welcome`. Pick an
-  unprovisioned client id with a `hostedPulseNumber` set.
-- `identity.js` and `crm-match.js` create and then delete their own fixtures.
-- `crm-match.js` reads real CRM clients; it does not write to UISP.

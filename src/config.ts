@@ -1,5 +1,11 @@
 import { z } from 'zod';
 
+/**
+ * Environment carries only infrastructure plumbing. OAuth is delegated to
+ * the `id` app; the settings shared across the domain's applications —
+ * where id lives, the code-exchange secret, UISP CRM access — come from the
+ * NocoDB `oAuthConfig` table (see idClient.ts), not from here.
+ */
 const envSchema = z.object({
   NODE_ENV: z.string().default('development'),
   PORT: z.coerce.number().default(3000),
@@ -14,28 +20,13 @@ const envSchema = z.object({
   DB_PASSWORD: z.string().default(''),
   DB_NAME: z.string().default('echo_db'),
 
-  // Google OAuth
-  GOOGLE_CLIENT_ID: z.string().default(''),
-  GOOGLE_CLIENT_SECRET: z.string().default(''),
+  // NocoDB settings store (shared oAuthConfig table)
+  NOCODB_BASE_URL: z.string().url().default('http://nocodb:8080'),
+  NOCODB_API_TOKEN: z.string().default(''),
+  NOCODB_BASE_NAME: z.string().default('id'),
+  NOCODB_TABLE_NAME: z.string().default('oAuthConfig'),
 
-  // Microsoft (Entra ID) OAuth. The login page hides the button until the
-  // client id is set, so an unconfigured deployment simply doesn't offer it.
-  MICROSOFT_CLIENT_ID: z.string().default(''),
-  MICROSOFT_CLIENT_SECRET: z.string().default(''),
-  // Authority segment. 'common' accepts any work/school account plus personal
-  // Microsoft accounts — the parallel to Google accepting any Google account.
-  // A directory (tenant) GUID here would restrict sign-in to that tenant alone.
-  MICROSOFT_TENANT: z.string().default('common'),
-
-  // UISP integration
-  UISP_BASE_URL: z.string().url().default('https://my.wisp.net'),
-  UISP_CRM_APP_KEY_READ: z.string().default(''),
-  UISP_SSO_SECRET: z.string().default(''),
-  // UCRM generates the plugin's public URL on install and shows it on the
-  // plugin page. Copy it here; the login page hides the ISP button until it's set.
-  UISP_PLUGIN_URL: z.string().default(''),
-
-  // Public app URL (used for OAuth callback URI)
+  // This app's own public URL (used to build the redirect_uri handed to id)
   APP_BASE_URL: z.string().url().default('https://dev-echo.localsplash.ai'),
 });
 

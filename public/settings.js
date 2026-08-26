@@ -52,82 +52,25 @@ function formatPhoneNumber(num) {
 
 async function loadAll() {
   populateCarrierDropdown();
-  await Promise.all([loadCarrierApps(), loadBusinessPhone(), loadIdentities()]);
+  await Promise.all([loadCarrierApps(), loadBusinessPhone()]);
 }
 
 /* ── Sign-in methods ── */
 
-const PROVIDER_LABEL = {
-  google:     'Google',
-  microsoft:  'Microsoft',
-  uisp:       'Wisp.net UISP account',
-  magic_link: 'Email link',
-};
-
-async function loadIdentities() {
-  const box = document.getElementById('identityList');
-  if (!box) return;
-  try {
-    const r = await fetch('/api/identities');
-    if (!r.ok) throw new Error('failed');
-    const { items } = await r.json();
-    renderIdentities(items || []);
-  } catch {
-    box.innerHTML = '<div class="text-sm text-red-600">Could not load sign-in methods.</div>';
+// Identities are managed by the id app, shared across every app on the
+// domain; Echo only links out to it.
+(function initIdAccountLink() {
+  const link = document.getElementById('idAccountLink');
+  const unavailable = document.getElementById('idAccountUnavailable');
+  const base = window.ECHO_CONFIG?.ID_BASE_URL;
+  if (link && base) {
+    link.href = base.replace(/\/+$/, '') + '/account';
+    link.classList.remove('hidden');
+    link.classList.add('flex');
+  } else if (unavailable) {
+    unavailable.classList.remove('hidden');
   }
-}
-
-function renderIdentities(items) {
-  const box = document.getElementById('identityList');
-  if (!items.length) {
-    box.innerHTML = '<div class="text-sm text-slate-400">No sign-in methods on file.</div>';
-    return;
-  }
-
-  // Only offer removal when another method would remain, so the UI can't
-  // suggest an action the server will refuse.
-  const removableCount = items.filter(i => i.removable).length;
-
-  box.innerHTML = items.map(i => {
-    const name  = PROVIDER_LABEL[i.provider] || i.provider;
-    const label = i.label ? `<div class="text-xs text-slate-500 truncate">${escapeHtml(i.label)}</div>` : '';
-    const canRemove = i.removable && (items.length > 1) && removableCount >= 1;
-
-    const action = i.removable
-      ? (canRemove
-          ? `<button onclick="unlinkIdentity(${i.iIdentityId})"
-               class="px-3 py-1.5 rounded-lg text-xs font-semibold text-red-600 hover:bg-red-50 transition-colors">Unlink</button>`
-          : `<span class="text-xs text-slate-400 px-2">Only method</span>`)
-      : `<span class="text-xs text-slate-400 px-2">Managed by ISP</span>`;
-
-    return `
-      <div class="flex items-center justify-between gap-3 py-2 border-b border-slate-100 last:border-0">
-        <div class="min-w-0">
-          <div class="text-sm font-medium text-slate-800">${name}</div>
-          ${label}
-        </div>
-        ${action}
-      </div>`;
-  }).join('');
-}
-
-async function unlinkIdentity(id) {
-  if (!confirm('Remove this sign-in method? You can link it again later.')) return;
-  const r = await fetch(`/api/identities/${id}`, { method: 'DELETE' });
-  const data = await r.json().catch(() => ({}));
-  if (r.ok && data.ok) {
-    showToast('Sign-in method removed.');
-    await loadIdentities();
-  } else {
-    showToast(data.error || 'Could not remove that method.', false);
-  }
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => (
-    { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]
-  ));
-}
+})();
 
 function populateCarrierDropdown() {
   carriers = CARRIERS;
@@ -407,23 +350,5 @@ async function saveCarrierApp() {
 }
 
 /* ── Init ── */
-
-// Microsoft is only offered where the server has credentials for it.
-if (window.ECHO_CONFIG?.MICROSOFT_ENABLED) {
-  const ms = document.getElementById('linkMicrosoftBtn');
-  if (ms) { ms.classList.remove('hidden'); ms.classList.add('flex'); }
-}
-
-// Surface the outcome of a link round-trip, then drop the query string so a
-// refresh doesn't replay the message.
-(function showLinkResult() {
-  const q = new URLSearchParams(location.search);
-  const linked = q.get('linked');
-  if (PROVIDER_LABEL[linked]) showToast(`${PROVIDER_LABEL[linked]} account linked.`);
-  else if (q.get('link_error') === 'already_linked')
-    showToast('That account is already linked to a different Echo user.', false);
-  else return;
-  history.replaceState({}, '', location.pathname);
-})();
 
 loadAll();
