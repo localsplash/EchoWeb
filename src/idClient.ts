@@ -131,3 +131,58 @@ export async function exchangeCode(
   if (!resp.ok) throw new Error(`id token exchange failed: ${resp.status}`);
   return resp.json() as Promise<IdTokenResult>;
 }
+
+// ─── Integration handshake ────────────────────────────────────────────────────
+
+export interface RegistrationResult {
+  origin: string;
+  secret: string;
+  events: string[];
+}
+
+/**
+ * Announce this app and its receiver endpoint to id, returning the secret
+ * that signs deliveries to us.
+ *
+ * Called on boot: the integration is established by running, so there is no
+ * separate credential to configure and no way to deploy an app that quietly
+ * fails to listen — id records a registration or flags its absence.
+ */
+export async function registerWithId(
+  idBase: string,
+  params: { clientSecret: string; name: string; webhookUrl: string }
+): Promise<RegistrationResult> {
+  const resp = await fetch(`${idBase}/api/apps/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      client_secret: params.clientSecret,
+      name: params.name,
+      webhook_url: params.webhookUrl,
+    }),
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '');
+    throw new Error(`id registration failed: ${resp.status} ${text.slice(0, 200)}`);
+  }
+  return resp.json() as Promise<RegistrationResult>;
+}
+
+/** Events after `since` — the boot-time catch-up for anything missed. */
+export async function fetchEventsSince(
+  idBase: string,
+  clientSecret: string,
+  since: number
+): Promise<Array<{ id: number; type: string; occurredAt: string; data: Record<string, unknown> }>> {
+  const url = new URL('/api/events', idBase);
+  url.searchParams.set('since', String(since));
+  const resp = await fetch(url, { headers: { 'X-Id-Client-Secret': clientSecret } });
+  if (!resp.ok) throw new Error(`id event catch-up failed: ${resp.status}`);
+  const body = (await resp.json()) as { items?: Array<Record<string, unknown>> };
+  return (body.items ?? []) as Array<{
+    id: number;
+    type: string;
+    occurredAt: string;
+    data: Record<string, unknown>;
+  }>;
+}

@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import type express from 'express';
 import { parseCrmClient, checkLoginState } from './auth';
 import { buildAuthorizeUrl } from './idClient';
+import { verifyIdSignature } from './idEvents';
+import crypto from 'crypto';
 
 describe('parseCrmClient', () => {
   it('extracts a 10-digit hostedPulseNumber from the attributes array', () => {
@@ -74,5 +76,44 @@ describe('buildAuthorizeUrl', () => {
     expect(url.origin + url.pathname).toBe('https://id.wisp.net/authorize');
     expect(url.searchParams.get('redirect_uri')).toBe('https://echo.wisp.net/auth/callback');
     expect(url.searchParams.get('state')).toBe('s-1');
+  });
+});
+
+describe('verifyIdSignature (receiver side of the id contract)', () => {
+  const secret = 'app-secret';
+  const body = JSON.stringify({ id: 9, type: 'session.revoked', data: { iUserId: 3 } });
+  const now = 1_774_500_000;
+
+  const sign = (ts: number, raw: string, key = secret) =>
+    crypto.createHmac('sha256', key).update(`${ts}.${raw}`).digest('hex');
+
+  it('accepts a genuine delivery', () => {
+    expect(
+      verifyIdSignature(secret, body, String(now), `sha256=${sign(now, body)}`, now)
+    ).toBe(true);
+  });
+
+  it('rejects a tampered body, wrong secret, or missing signature', () => {
+    expect(
+      verifyIdSignature(secret, body + 'x', String(now), `sha256=${sign(now, body)}`, now)
+    ).toBe(false);
+    expect(
+      verifyIdSignature(secret, body, String(now), `sha256=${sign(now, body, 'other')}`, now)
+    ).toBe(false);
+    expect(verifyIdSignature(secret, body, String(now), undefined, now)).toBe(false);
+  });
+
+  // Signing the timestamp is what makes a captured delivery unusable later.
+  it('rejects a delivery replayed outside the 300s window', () => {
+    const sig = `sha256=${sign(now, body)}`;
+    expect(verifyIdSignature(secret, body, String(now), sig, now + 301)).toBe(false);
+    expect(verifyIdSignature(secret, body, String(now), sig, now + 299)).toBe(true);
+  });
+
+  it('rejects a non-numeric or absent timestamp rather than throwing', () => {
+    expect(verifyIdSignature(secret, body, 'not-a-number', `sha256=${sign(now, body)}`, now)).toBe(
+      false
+    );
+    expect(verifyIdSignature(secret, body, undefined, `sha256=${sign(now, body)}`, now)).toBe(false);
   });
 });

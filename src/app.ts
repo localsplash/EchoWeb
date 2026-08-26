@@ -32,6 +32,13 @@ import {
   type CrmConfig,
 } from './auth';
 import { IdClient, buildAuthorizeUrl, exchangeCode, type IdTokenResult } from './idClient';
+import {
+  verifyIdSignature,
+  applyIdEvent,
+  getWebhookSecret,
+  writeCursor,
+  type IdEvent,
+} from './idEvents';
 
 type ApiMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
@@ -173,7 +180,18 @@ export function buildApp() {
   const logger = pino({ level: config.LOG_LEVEL });
   const app = express();
 
-  app.use(express.json({ limit: '1mb' }));
+  app.use(
+    express.json({
+      limit: '1mb',
+      // The id signature covers the raw bytes, so a re-serialised object
+      // would not verify. Captured only for the receiver route.
+      verify: (req, _res, buf) => {
+        if (req.url?.startsWith('/id/events')) {
+          (req as express.Request & { rawBody?: string }).rawBody = buf.toString('utf8');
+        }
+      },
+    })
+  );
   app.use(express.urlencoded({ extended: false }));
   app.use(pinoHttp({ logger }));
   app.use(express.static(publicDir, { index: false }));
@@ -201,6 +219,42 @@ export function buildApp() {
 
   app.get('/healthz', (_req, res) => {
     res.json({ ok: true, service: 'EchoWeb' });
+  });
+
+  // ── id event receiver ────────────────────────────────────────────────────────
+  // Echo's sessions are its own, so a revocation at id reaches us only here.
+  // Answers 2xx only once the event is applied; id retries otherwise, which
+  // is why every handler is idempotent.
+  app.post('/id/events', async (req, res) => {
+    const secret = getWebhookSecret();
+    if (!secret) {
+      logger.warn('[id-events] delivery arrived before registration completed');
+      return res.status(503).json({ error: 'Not registered with id yet' });
+    }
+
+    const rawBody = (req as express.Request & { rawBody?: string }).rawBody ?? '';
+    const ok = verifyIdSignature(
+      secret,
+      rawBody,
+      req.get('X-Id-Timestamp'),
+      req.get('X-Id-Signature')
+    );
+    if (!ok) {
+      logger.warn('[id-events] rejected a delivery with a bad or stale signature');
+      return res.status(401).json({ error: 'Invalid signature' });
+    }
+
+    try {
+      const event = req.body as IdEvent;
+      await applyIdEvent(db, event, (m) => logger.info(m));
+      await writeCursor(db, event.id);
+      return res.json({ ok: true });
+    } catch (err) {
+      // Fail loudly: a non-2xx keeps the event queued at id rather than
+      // acknowledging something we did not actually apply.
+      logger.error({ err }, '[id-events] handler failed');
+      return res.status(500).json({ error: 'Handler failed' });
+    }
   });
 
   // ── Root / login guard ───────────────────────────────────────────────────────
