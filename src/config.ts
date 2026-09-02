@@ -6,7 +6,7 @@ import { SettingsStore, Settings, SettingsUnavailableError, CACHE_TTL_MS } from 
  *
  * The environment states two things — where the settings live and the token
  * to read them with — and everything else is a row in `auth_tbl_Settings`
- * inside the `IdentityBase` base (see localsplash/identify#15). That is why
+ * inside the `IdentityBase` base (see localsplash/identity#15). That is why
  * nothing below carries a default: an invented `https://io.echo.wisp.net` or
  * `echo-database` is a value that looks configured and is wrong, which is
  * worse than one that is plainly missing.

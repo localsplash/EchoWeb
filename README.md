@@ -33,7 +33,7 @@ That lets a remote developer run the UI without needing MySQL or the Bandwidth w
 ## Configuration
 
 EchoWeb reads its settings from NocoDB: the base **`IdentityBase`**, table
-**`auth_tbl_Settings`** (see localsplash/identify#15). The `.env` carries
+**`auth_tbl_Settings`** (see localsplash/identity#15). The `.env` carries
 `NOCODB_BASE_URL` and `NOCODB_API_TOKEN` and nothing else; every other value
 is a row in that table, shared with every other application.
 
