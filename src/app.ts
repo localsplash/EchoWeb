@@ -4,7 +4,8 @@ import https from 'https';
 import path from 'path';
 import pinoHttp from 'pino-http';
 import pino from 'pino';
-import { loadConfig } from './config';
+import { loadConfig, ensureFreshConfig } from './config';
+import { SettingsUnavailableError, SETTINGS_BASE_NAME } from './settings';
 import { getDb } from './db';
 import {
   getSessionIdFromRequest,
@@ -187,23 +188,41 @@ export function buildApp() {
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: false }));
   app.use(pinoHttp({ logger }));
+
+  // Settings-free, so it answers while the store is down: "the process is
+  // up" stays distinguishable from "the process cannot read its settings".
+  app.get('/healthz', (_req, res) => res.json({ ok: true, service: 'EchoWeb' }));
+
+  /**
+   * Keep the settings snapshot fresh before anything reads it.
+   *
+   * The store caches for 30 seconds, so this is a comparison on the hot path
+   * and a NocoDB read at most twice a minute — and a change made in NocoDB
+   * reaches this app within that window, with no restart. A failure is not
+   * swallowed: it travels to the handler below, which answers 503 saying
+   * which of unreachable / missing / ambiguous it was.
+   */
+  app.use((_req, _res, next) => {
+    ensureFreshConfig().then(() => next(), next);
+  });
+
   app.use(express.static(publicDir, { index: false }));
 
   // Browser config (media URL, UISP plugin URL, which logins are available).
-  const configJs = `window.ECHO_CONFIG=${JSON.stringify({
-    MEDIA_BASE_URL: config.MEDIA_BASE_URL,
-    UISP_PLUGIN_URL: config.UISP_PLUGIN_URL,
-    // Only the flag — never the client id, which the browser has no use for.
-    MICROSOFT_ENABLED: Boolean(config.MICROSOFT_CLIENT_ID),
-  })};`;
+  // Rebuilt per request from the current settings rather than frozen at
+  // boot, so flipping a value in NocoDB reaches the browser too.
   app.get('/config.js', (_req, res) => {
+    const current = loadConfig();
     res.set('Content-Type', 'application/javascript');
     res.set('Cache-Control', 'public, max-age=300');
-    res.send(configJs);
-  });
-
-  app.get('/healthz', (_req, res) => {
-    res.json({ ok: true, service: 'EchoWeb' });
+    res.send(
+      `window.ECHO_CONFIG=${JSON.stringify({
+        MEDIA_BASE_URL: current.MEDIA_BASE_URL,
+        UISP_PLUGIN_URL: current.UISP_PLUGIN_URL,
+        // Only the flag — never the client id, which the browser has no use for.
+        MICROSOFT_ENABLED: Boolean(current.MICROSOFT_CLIENT_ID),
+      })};`
+    );
   });
 
   // ── Root / login guard ───────────────────────────────────────────────────────
@@ -1037,6 +1056,15 @@ export function buildApp() {
       _next: express.NextFunction
     ) => {
       logger.error(err);
+      // A settings store that cannot answer is a configuration fault, and
+      // saying so beats a 500 that reads as an application fault.
+      if (err instanceof SettingsUnavailableError) {
+        return res.status(503).json({
+          error: err.message,
+          reason: err.reason,
+          base: SETTINGS_BASE_NAME,
+        });
+      }
       res.status(500).json({ error: 'Internal server error' });
     }
   );
