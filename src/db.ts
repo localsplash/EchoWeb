@@ -1,9 +1,17 @@
 import mysql from 'mysql2/promise';
-import { AppConfig } from './config';
+import { EnvConfig } from './config';
 
 let pool: mysql.Pool | null = null;
 
-export function getDb(config: AppConfig): mysql.Pool {
+/**
+ * The Echo database.
+ *
+ * Its coordinates come from the environment rather than from the settings,
+ * because this is where the settings themselves live — a database cannot
+ * carry its own address. Everything else about this app is a row in
+ * echo_tbl_Settings.
+ */
+export function getDb(config: EnvConfig): mysql.Pool {
   if (!pool) {
     pool = mysql.createPool({
       host: config.DB_HOST,

@@ -32,14 +32,32 @@ That lets a remote developer run the UI without needing MySQL or the Bandwidth w
 
 ## Configuration
 
-EchoWeb reads its settings from NocoDB: the base **`IdentityBase`**, table
-**`auth_tbl_Settings`** (see localsplash/identity#15). The `.env` carries
-`NOCODB_BASE_URL` and `NOCODB_API_TOKEN` and nothing else; every other value
-is a row in that table, shared with every other application.
+EchoWeb reads its settings from the **Echo database**, table
+`echo_tbl_Settings` — rows where `sApp` is `'*'` (read by every Echo app) or
+`'web'` (this one), with the app's own row winning over the general one. The
+table is defined in EchoDatabase, `init/009_settings.sql`; adding a
+web-specific setting is a row with `sApp='web'`, never a new table.
 
-The base is found by **name** at runtime — a base ID in a config file
-survives a rename and outlives a restore. Values and the resolved base/table
-IDs sit on one 30-second clock, so a change in NocoDB reaches a running app
-without a restart; any failure drops the cache so the next attempt
-re-detects. There is no fallback: one retry at startup then exit, and `503`
-at runtime. `/healthz` needs no settings and keeps answering.
+The `.env` carries only what cannot describe itself:
+
+| Variable | Why it is here |
+| --- | --- |
+| `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` | Where `echo_tbl_Settings` lives — a database cannot carry its own address |
+| `NOCODB_BASE_URL` / `NOCODB_API_TOKEN` | Where `trustedCIDR` lives (below) |
+
+**`trustedCIDR` is the one setting read from outside the Echo database.** It
+is platform-wide network policy that identity and every application have to
+agree on, so it is spelled once — in the NocoDB base `IdentityBase`, table
+`auth_tbl_Settings` — rather than copied into each app's own settings. That
+base is found by *name* at runtime, never by an ID from a config file: an ID
+survives a rename and outlives a restore. Pin `IDENTITY_TRUSTED_NETWORK` in
+the environment and NocoDB is not consulted for it at all.
+
+Both sources are cached for 30 seconds, so a change reaches a running app
+without a restart, and both drop their cache on failure so the next attempt
+re-reads rather than trusting something unconfirmed. There is no fallback to
+defaults: one retry at startup then exit, `503` at runtime, and `/healthz`
+answers throughout because it needs no settings.
+
+Any settings key may be pinned in the environment as an override (blank counts
+as unset) — see `.env.example`.

@@ -1,21 +1,31 @@
 import { z } from 'zod';
-import { SettingsStore, Settings, SettingsUnavailableError, CACHE_TTL_MS } from './settings';
+import mysql from 'mysql2/promise';
+import {
+  CACHE_TTL_MS,
+  Settings,
+  SettingsUnavailableError,
+  TrustedNetworkStore,
+  readEchoSettings,
+} from './settings';
 
 /**
- * Configuration comes from the settings table, not from `.env`.
+ * Configuration comes from the Echo database, not from `.env`.
  *
- * The environment states two things — where the settings live and the token
- * to read them with — and everything else is a row in `auth_tbl_Settings`
- * inside the `IdentityBase` base (see localsplash/identity#15). That is why
- * nothing below carries a default: an invented `https://io.echo.wisp.net` or
+ * The environment states how to reach the two things that cannot describe
+ * themselves: the Echo database (you cannot read a database's address out of
+ * that database) and the NocoDB base carrying the platform's `trustedCIDR`.
+ * Everything else is a row in `echo_tbl_Settings` — see EchoDatabase
+ * `init/009_settings.sql`.
+ *
+ * Nothing below carries a default. An invented `https://io.echo.wisp.net` or
  * `echo-database` is a value that looks configured and is wrong, which is
  * worse than one that is plainly missing.
  *
  * `loadConfig()` stays synchronous and keeps the shape every caller already
- * expects. What changed is where the object comes from: a snapshot of the
- * settings, refreshed at most every 30 seconds by the middleware in app.ts,
- * so a change in NocoDB reaches this app without a restart. Reading before
- * the first successful refresh throws rather than guessing.
+ * expects. What changed is where the object comes from: a snapshot refreshed
+ * at most every 30 seconds by the middleware in app.ts, so a settings change
+ * reaches this app without a restart. Reading before the first successful
+ * refresh throws rather than guessing.
  */
 
 const envSchema = z.object({
@@ -23,9 +33,20 @@ const envSchema = z.object({
   PORT: z.coerce.number().default(3000),
   LOG_LEVEL: z.string().default('info'),
 
-  // The only two things this app reads from its environment.
+  // The Echo database. Its coordinates are the one thing that has to be
+  // stated outside it — everything else about this app lives in
+  // echo_tbl_Settings.
+  DB_HOST: z.string().default(''),
+  DB_PORT: z.coerce.number().default(3306),
+  DB_USER: z.string().default(''),
+  DB_PASSWORD: z.string().default(''),
+  DB_NAME: z.string().default(''),
+
+  // Where to read the platform-wide trustedCIDR from.
   NOCODB_BASE_URL: z.string().default(''),
   NOCODB_API_TOKEN: z.string().default(''),
+  // ...unless this deployment pins it, in which case NocoDB is not consulted.
+  IDENTITY_TRUSTED_NETWORK: z.string().default(''),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
@@ -34,16 +55,11 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): EnvConfig {
   return envSchema.parse(env);
 }
 
-/** The keys this app reads out of `auth_tbl_Settings`. */
+/** The keys this app reads out of `echo_tbl_Settings`. */
 export const SETTING_KEYS = [
   'ECHO_SERVICE_BASE_URL',
   'MEDIA_BASE_URL',
   'APP_BASE_URL',
-  'DB_HOST',
-  'DB_PORT',
-  'DB_USER',
-  'DB_PASSWORD',
-  'DB_NAME',
   'GOOGLE_CLIENT_ID',
   'GOOGLE_CLIENT_SECRET',
   'MICROSOFT_CLIENT_ID',
@@ -53,20 +69,12 @@ export const SETTING_KEYS = [
   'UISP_CRM_APP_KEY_READ',
   'UISP_SSO_SECRET',
   'UISP_PLUGIN_URL',
-  // One value for the whole platform, not a per-app spelling of the same
-  // network: the servers inside it are the first-party ones.
-  'trustedCIDR',
 ] as const;
 
 export interface AppConfig extends EnvConfig {
   ECHO_SERVICE_BASE_URL: string;
   MEDIA_BASE_URL: string;
   APP_BASE_URL: string;
-  DB_HOST: string;
-  DB_PORT: number;
-  DB_USER: string;
-  DB_PASSWORD: string;
-  DB_NAME: string;
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
   MICROSOFT_CLIENT_ID: string;
@@ -76,73 +84,63 @@ export interface AppConfig extends EnvConfig {
   UISP_CRM_APP_KEY_READ: string;
   UISP_SSO_SECRET: string;
   UISP_PLUGIN_URL: string;
+  /** From IdentityBase, not from echo_tbl_Settings. */
   trustedCIDR: string;
 }
 
 /**
- * Any key may be pinned in the environment, where it wins over the store —
- * an override for deployments that manage configuration as environment, not
- * a default. Blank counts as unset.
+ * Any settings key may be pinned in the environment, where it wins over the
+ * row — an override for deployments that manage configuration as
+ * environment, not a default. Blank counts as unset.
  */
 function overridesFromEnv(env: NodeJS.ProcessEnv = process.env): Settings {
   const overrides: Settings = {};
-  const take = (key: string, from: string): void => {
-    if (key in overrides) return;
-    const raw = env[from];
+  for (const key of SETTING_KEYS) {
+    const raw = env[key];
     if (typeof raw === 'string' && raw.trim() !== '') overrides[key] = raw.trim();
-  };
-  for (const key of SETTING_KEYS) take(key, key);
-  // `trustedCIDR` reads oddly as a variable name.
-  take('trustedCIDR', 'IDENTITY_TRUSTED_NETWORK');
+  }
   return overrides;
 }
 
-let store: SettingsStore | null = null;
+let trustedNetwork: TrustedNetworkStore | null = null;
 let snapshot: { at: number; config: AppConfig } | null = null;
 
-function settingsStore(): SettingsStore {
-  if (!store) store = new SettingsStore(loadEnv(), overridesFromEnv());
-  return store;
-}
-
-function assemble(env: EnvConfig, settings: Settings): AppConfig {
-  const port = Number.parseInt((settings.DB_PORT ?? '').trim(), 10);
+function assemble(env: EnvConfig, settings: Settings, cidr: string): AppConfig {
+  const value = (key: string): string => settings[key] ?? '';
   return {
     ...env,
-    ECHO_SERVICE_BASE_URL: settings.ECHO_SERVICE_BASE_URL ?? '',
-    MEDIA_BASE_URL: settings.MEDIA_BASE_URL ?? '',
-    APP_BASE_URL: settings.APP_BASE_URL ?? '',
-    DB_HOST: settings.DB_HOST ?? '',
-    // MySQL's own registered port — the protocol's default, not a guess
-    // about this deployment.
-    DB_PORT: Number.isFinite(port) && port > 0 ? port : 3306,
-    DB_USER: settings.DB_USER ?? '',
-    DB_PASSWORD: settings.DB_PASSWORD ?? '',
-    DB_NAME: settings.DB_NAME ?? '',
-    GOOGLE_CLIENT_ID: settings.GOOGLE_CLIENT_ID ?? '',
-    GOOGLE_CLIENT_SECRET: settings.GOOGLE_CLIENT_SECRET ?? '',
-    MICROSOFT_CLIENT_ID: settings.MICROSOFT_CLIENT_ID ?? '',
-    MICROSOFT_CLIENT_SECRET: settings.MICROSOFT_CLIENT_SECRET ?? '',
-    MICROSOFT_TENANT: settings.MICROSOFT_TENANT ?? '',
-    UISP_BASE_URL: settings.UISP_BASE_URL ?? '',
-    UISP_CRM_APP_KEY_READ: settings.UISP_CRM_APP_KEY_READ ?? '',
-    UISP_SSO_SECRET: settings.UISP_SSO_SECRET ?? '',
-    UISP_PLUGIN_URL: settings.UISP_PLUGIN_URL ?? '',
-    trustedCIDR: settings.trustedCIDR ?? '',
+    ECHO_SERVICE_BASE_URL: value('ECHO_SERVICE_BASE_URL'),
+    MEDIA_BASE_URL: value('MEDIA_BASE_URL'),
+    APP_BASE_URL: value('APP_BASE_URL'),
+    GOOGLE_CLIENT_ID: value('GOOGLE_CLIENT_ID'),
+    GOOGLE_CLIENT_SECRET: value('GOOGLE_CLIENT_SECRET'),
+    MICROSOFT_CLIENT_ID: value('MICROSOFT_CLIENT_ID'),
+    MICROSOFT_CLIENT_SECRET: value('MICROSOFT_CLIENT_SECRET'),
+    MICROSOFT_TENANT: value('MICROSOFT_TENANT'),
+    UISP_BASE_URL: value('UISP_BASE_URL'),
+    UISP_CRM_APP_KEY_READ: value('UISP_CRM_APP_KEY_READ'),
+    UISP_SSO_SECRET: value('UISP_SSO_SECRET'),
+    UISP_PLUGIN_URL: value('UISP_PLUGIN_URL'),
+    trustedCIDR: cidr,
   };
 }
 
-/** Read the settings and replace the snapshot. Throws if they cannot be read. */
-export async function refreshConfig(): Promise<AppConfig> {
-  const config = assemble(loadEnv(), await settingsStore().getAll());
+/** Read both sources and replace the snapshot. Throws if either cannot be read. */
+export async function refreshConfig(db: mysql.Pool): Promise<AppConfig> {
+  const env = loadEnv();
+  if (!trustedNetwork) {
+    trustedNetwork = new TrustedNetworkStore(env, env.IDENTITY_TRUSTED_NETWORK);
+  }
+  const settings = { ...(await readEchoSettings(db)), ...overridesFromEnv() };
+  const config = assemble(env, settings, await trustedNetwork.get());
   snapshot = { at: Date.now(), config };
   return config;
 }
 
 /** Refresh only when the snapshot has aged out; used per request. */
-export async function ensureFreshConfig(): Promise<AppConfig> {
+export async function ensureFreshConfig(db: mysql.Pool): Promise<AppConfig> {
   if (snapshot && Date.now() - snapshot.at < CACHE_TTL_MS) return snapshot.config;
-  return refreshConfig();
+  return refreshConfig(db);
 }
 
 /**
@@ -154,19 +152,19 @@ export function loadConfig(): AppConfig {
   if (!snapshot) {
     throw new SettingsUnavailableError(
       'unreachable',
-      'Settings have not been read yet — the settings store was unreachable at startup.'
+      'Settings have not been read yet — echo_tbl_Settings was unreachable at startup.'
     );
   }
   return snapshot.config;
 }
 
-/** Drop the snapshot and the resolved base/table IDs; the retry path. */
+/** Drop the snapshot and the resolved IdentityBase IDs; the retry path. */
 export function invalidateConfig(): void {
   snapshot = null;
-  settingsStore().invalidate();
+  trustedNetwork?.invalidate();
 }
 
-/** Test seam: install a snapshot without touching NocoDB. */
+/** Test seam: install a snapshot without touching the database. */
 export function setConfigForTesting(config: AppConfig): void {
   snapshot = { at: Date.now(), config };
 }
