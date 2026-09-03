@@ -222,6 +222,11 @@ export function buildApp() {
         UISP_PLUGIN_URL: current.UISP_PLUGIN_URL,
         // Only the flag — never the client id, which the browser has no use for.
         MICROSOFT_ENABLED: Boolean(current.MICROSOFT_CLIENT_ID),
+        // The Pusher key and cluster are public by design — the client has to
+        // present the key to connect. The app id and secret stay in
+        // EchoService. Blank here means the browser polls instead (#15/#16).
+        PUSHER_KEY: current.PUSHER_KEY,
+        PUSHER_CLUSTER: current.PUSHER_CLUSTER,
       })};`
     );
   });
@@ -875,6 +880,38 @@ export function buildApp() {
       })
       .then((result) => res.status(result.status).json(result.data))
       .catch(next);
+  });
+
+  /**
+   * Authorize a Pusher private channel subscription (#16).
+   *
+   * The browser cannot sign for itself — that needs the Pusher secret, which
+   * lives in EchoService and stays there. So the client's socket_id and
+   * channel_name come here on its session cookie, and go on to EchoService
+   * with the business number resolved from that session. EchoService refuses
+   * to sign a channel that does not belong to the business it was told about,
+   * which is what stops one business subscribing to another's messages.
+   *
+   * Pusher's client posts this as a form; express.urlencoded above has already
+   * turned it into req.body by the time we get here.
+   */
+  app.post('/api/pusher/auth', async (req, res, next) => {
+    try {
+      const session = await resolveSession(req);
+      const result = await proxyEchoService(
+        loadConfig(),
+        session,
+        '/api/pusher/auth',
+        'POST',
+        {
+          socket_id: req.body?.socket_id ?? '',
+          channel_name: req.body?.channel_name ?? '',
+        }
+      );
+      return res.status(result.status).json(result.data);
+    } catch (error) {
+      next(error);
+    }
   });
 
   // ── Draft media ──────────────────────────────────────────────────────────────
