@@ -73,3 +73,123 @@ export async function readEchoSettings(
   }
   return settings;
 }
+
+// ─── IdentityBase, for what the platform decides once ────────────────────────
+
+/**
+ * Two values EchoWeb reads from the platform's own settings base rather than
+ * from `echo_tbl_Settings`.
+ *
+ * `PARENT_DOMAIN` is the domain every application on the platform hangs off.
+ * It is not an Echo setting — identity owns it, and its own hostname is
+ * derived from it — so restating it here would be a second place for the two
+ * to disagree. Every public URL this app has follows from it (see config.ts),
+ * which is what makes moving the platform to a new domain one edit instead of
+ * a hunt through rows.
+ *
+ * `IDENTITY_CLIENT_SECRET` is how this app authenticates to identity's
+ * server-to-server token endpoint. It is identity's secret, held where
+ * identity holds it.
+ *
+ * This is the NocoDB read that #17 removed — deliberately, because the value
+ * it fetched then (`trustedCIDR`) had no consumers. These two do. The
+ * credentials come from the same shared bootstrap file EchoService uses, so it
+ * costs a deployment nothing: identity's `/setup` is still the only place
+ * anyone types them.
+ */
+export const IDENTITY_BASE_NAME = 'IdentityBase';
+export const IDENTITY_TABLE_NAME = 'auth_tbl_Settings';
+
+/** The keys read from IdentityBase. Blank counts as unset, as everywhere. */
+export const IDENTITY_KEYS = ['PARENT_DOMAIN', 'IDENTITY_CLIENT_SECRET'] as const;
+
+interface NocoConfig {
+  NOCODB_BASE_URL: string;
+  NOCODB_API_TOKEN: string;
+}
+
+export class IdentitySettingsStore {
+  private ids: { at: number; tableId: string } | null = null;
+  private cache: { at: number; values: Settings } | null = null;
+
+  constructor(private config: NocoConfig) {}
+
+  private async api<T>(path: string): Promise<T> {
+    const resp = await fetch(`${this.config.NOCODB_BASE_URL}${path}`, {
+      headers: { 'xc-token': this.config.NOCODB_API_TOKEN, 'Content-Type': 'application/json' },
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(`NocoDB GET ${path} failed: ${resp.status} ${text.slice(0, 200)}`);
+    }
+    return resp.json() as Promise<T>;
+  }
+
+  private async resolveTable(): Promise<string> {
+    if (this.ids && Date.now() - this.ids.at < CACHE_TTL_MS) return this.ids.tableId;
+    if (!this.config.NOCODB_BASE_URL || !this.config.NOCODB_API_TOKEN) {
+      throw new SettingsUnavailableError(
+        'unconfigured',
+        'NOCODB_BASE_URL and NOCODB_API_TOKEN must be set to read PARENT_DOMAIN from ' +
+          `${IDENTITY_BASE_NAME}. On a single-host install they come from identity's ` +
+          'config volume, mounted read-only at /data.'
+      );
+    }
+    // Found by NAME at runtime, never by an ID from a config file: an ID
+    // survives a rename and outlives a restore.
+    const bases = await this.api<{ list: Array<{ id: string; title: string }> }>(
+      '/api/v2/meta/bases'
+    );
+    const matches = bases.list.filter((b) => b.title === IDENTITY_BASE_NAME);
+    if (matches.length !== 1) {
+      throw new SettingsUnavailableError(
+        'unreachable',
+        `Expected exactly one NocoDB base named ${IDENTITY_BASE_NAME}, found ${matches.length}.`
+      );
+    }
+    const tables = await this.api<{ list: Array<{ id: string; title: string }> }>(
+      `/api/v2/meta/bases/${matches[0].id}/tables`
+    );
+    const table = tables.list.find((t) => t.title === IDENTITY_TABLE_NAME);
+    if (!table) {
+      throw new SettingsUnavailableError(
+        'unreachable',
+        `The base ${IDENTITY_BASE_NAME} has no table named ${IDENTITY_TABLE_NAME}.`
+      );
+    }
+    this.ids = { at: Date.now(), tableId: table.id };
+    return table.id;
+  }
+
+  async get(): Promise<Settings> {
+    if (this.cache && Date.now() - this.cache.at < CACHE_TTL_MS) return this.cache.values;
+    try {
+      const tableId = await this.resolveTable();
+      const page = await this.api<{ list: Array<{ Key: string; Value: string | null }> }>(
+        `/api/v2/tables/${tableId}/records?limit=200`
+      );
+      const values: Settings = {};
+      for (const key of IDENTITY_KEYS) {
+        const row = page.list.find((r) => r.Key === key);
+        const value = row && row.Value != null ? String(row.Value).trim() : '';
+        if (value) values[key] = value;
+      }
+      this.cache = { at: Date.now(), values };
+      return values;
+    } catch (err) {
+      // Never reuse an ID we could not confirm.
+      this.ids = null;
+      if (err instanceof SettingsUnavailableError) throw err;
+      throw new SettingsUnavailableError(
+        'unreachable',
+        `NocoDB at ${this.config.NOCODB_BASE_URL} did not answer or rejected the token: ` +
+          String(err instanceof Error ? err.message : err).slice(0, 200)
+      );
+    }
+  }
+
+  invalidate(): void {
+    this.cache = null;
+    this.ids = null;
+  }
+}

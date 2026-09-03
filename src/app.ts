@@ -14,17 +14,10 @@ import {
   clearSessionCookie,
   deleteSession,
   updateSessionBusinessNumber,
-  buildGoogleAuthUrl,
-  buildMicrosoftAuthUrl,
   setOAuthStateCookie,
   clearOAuthStateCookie,
   getOAuthStateFromRequest,
-  exchangeGoogleCode,
-  getGoogleUserInfo,
-  exchangeMicrosoftCode,
-  parseMicrosoftIdToken,
-  verifySsoCode,
-  consumeNonce,
+  redeemIdentityCode,
   fetchUispClient,
   findUispClientByEmail,
   upsertOrg,
@@ -440,139 +433,193 @@ export function buildApp() {
     return '/';
   }
 
+  // ── Sign-in, brokered by the identity service ────────────────────────────────
+
+  /**
+   * Every way into Echo now starts here.
+   *
+   * identity is the platform's single sign-in surface: it holds the Google and
+   * Microsoft client registrations and the UISP bridge, so one OAuth redirect
+   * URI is registered once for the whole platform instead of one per app. This
+   * app no longer talks to a provider at all — it asks identity who arrived.
+   *
+   * What comes back is the same shape the provider used to give us — a
+   * provider, a subject and an address — so everything downstream
+   * (completeOAuthLogin: the super-admin rule, the CRM match, org
+   * provisioning, membership) is untouched. Only the way we learn it changed.
+   */
+  function identityAuthorizeUrl(config: ReturnType<typeof loadConfig>, state: string): string {
+    const url = new URL('/authorize', config.IDENTITY_BASE_URL);
+    url.searchParams.set('redirect_uri', identityRedirectUri(config));
+    url.searchParams.set('state', state);
+    return url.toString();
+  }
+
+  function identityRedirectUri(config: ReturnType<typeof loadConfig>): string {
+    return `${config.APP_BASE_URL}/auth/identity/callback`;
+  }
+
+  app.get('/auth/identity', (req, res) => {
+    const config = loadConfig();
+    if (!config.IDENTITY_BASE_URL) return res.redirect('/?auth_error=identity_not_configured');
+    // Carried through identity and handed back verbatim, so the reply can be
+    // tied to the request that started it.
+    const state: OAuthState = {
+      csrf: generateId(16),
+      context: 'login',
+      provider: 'google',
+      returnTo: typeof req.query.returnTo === 'string' ? req.query.returnTo : undefined,
+    };
+    setOAuthStateCookie(res, state);
+    return res.redirect(identityAuthorizeUrl(config, state.csrf));
+  });
+
+  app.get('/auth/identity/callback', async (req, res, next) => {
+    try {
+      const config = loadConfig();
+      const code = typeof req.query.code === 'string' ? req.query.code : '';
+      const returned = typeof req.query.state === 'string' ? req.query.state : '';
+      if (!code) return res.redirect('/?auth_error=missing_code');
+
+      const stored = getOAuthStateFromRequest(req);
+      clearOAuthStateCookie(res);
+
+      // Two ways to arrive, and they are told apart by the state.
+      //
+      // `sso` is identity's marker for an unsolicited entry — someone came
+      // straight from the ISP portal, so there was never a request of ours for
+      // this to match. There is nothing to compare against, and nothing is
+      // weakened by saying so: the code is single-use, minted for this exact
+      // redirect_uri, and redeemed server-to-server below. The browser never
+      // carries anything that would let a third party mint one.
+      //
+      // Anything else has to match the cookie we set on the way out.
+      if (returned !== 'sso') {
+        if (!stored || !returned || stored.csrf !== returned) {
+          return res.redirect('/?auth_error=state');
+        }
+      }
+
+      const claim = await redeemIdentityCode(config, code, identityRedirectUri(config));
+      if (!claim) return res.redirect('/?auth_error=token_exchange_failed');
+
+      const provider = claim.identity.provider;
+      const subject = claim.identity.subject;
+      if (!provider || !subject) return res.redirect('/?auth_error=userinfo_failed');
+
+      const userInfo: OAuthUserInfo = {
+        sub: subject,
+        email: claim.user.email ?? '',
+        name: claim.user.displayName ?? '',
+      };
+
+      // The ISP bridge is an identity in its own right and carries the CRM
+      // client id as its subject, so it provisions directly instead of going
+      // looking for the subscriber by address.
+      if (provider === 'uisp') {
+        const dest = await completeUispLogin(res, subject, userInfo.email || null);
+        return res.redirect(dest);
+      }
+
+      const dest = await completeOAuthLogin(
+        res,
+        provider as OAuthProvider,
+        userInfo,
+        stored ?? { csrf: '', context: 'login', provider: provider as OAuthProvider }
+      );
+      return res.redirect(dest);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * The ISP bridge, once identity has verified it.
+   *
+   * Lifted out of the old /sso/callback unchanged apart from where the client
+   * id comes from: identity checked the HMAC and burned the nonce, so what
+   * arrives here is already proven.
+   */
+  async function completeUispLogin(
+    res: express.Response,
+    clientId: string,
+    email: string | null
+  ): Promise<string> {
+    const uispClient = await fetchUispClient(loadConfig(), clientId);
+    if (!uispClient) {
+      logger.warn(`[sso] Could not fetch UISP client ${clientId}`);
+      return '/?auth_error=uisp_fetch_failed';
+    }
+    if (!uispClient.hostedPulseNumber) return '/no-access.html';
+
+    const iBusinessNumber = parseInt(uispClient.hostedPulseNumber, 10);
+    const { iOrgId, iUserId, isFirstEntry } = await provisionFromCrmClient(db, {
+      clientId,
+      iBusinessNumber,
+      displayName: uispClient.displayName,
+      contactEmail: uispClient.email ?? email,
+      identity: { provider: 'uisp', subject: clientId, email: uispClient.email ?? email },
+    });
+    if (isFirstEntry) {
+      logger.info(`[sso] Provisioned org ${iOrgId} owner ${iUserId} from UISP client ${clientId}`);
+    }
+    const sessionId = await createFullSession(db, {
+      iUserId,
+      iOrgId,
+      iBusinessNumber,
+      role: 'owner',
+    });
+    setSessionCookie(res, sessionId);
+    return isFirstEntry ? '/welcome' : '/';
+  }
+
+  // Old entry points, kept so bookmarks and the UISP plugin keep working.
+  // They no longer start an OAuth flow of their own; they hand over.
+  app.get('/auth/google', (_req, res) => res.redirect('/auth/identity'));
+  app.get('/auth/microsoft', (_req, res) => res.redirect('/auth/identity'));
+
   // ── Google OAuth ─────────────────────────────────────────────────────────────
 
   // Plain sign-in only. Account linking goes through /auth/google/link, which
   // derives the target user from the server-side session — the context is never
   // taken from the request.
-  app.get('/auth/google', async (_req, res) => {
-    const state: OAuthState = { csrf: generateId(16), context: 'login', provider: 'google' };
-    setOAuthStateCookie(res, state);
-    return res.redirect(buildGoogleAuthUrl(loadConfig(), state));
-  });
 
-  app.get('/auth/google/callback', async (req, res, next) => {
-    try {
-      clearOAuthStateCookie(res);
-
-      if (req.query.error) return res.redirect('/?auth_error=google_denied');
-      const code = req.query.code as string;
-      if (!code) return res.redirect('/?auth_error=missing_code');
-
-      const checked = checkOAuthState(req, 'google');
-      if ('error' in checked) return res.redirect(checked.error);
-
-      const tokens = await exchangeGoogleCode(loadConfig(), code);
-      if (!tokens?.access_token) return res.redirect('/?auth_error=token_exchange_failed');
-
-      const userInfo = await getGoogleUserInfo(tokens.access_token);
-      if (!userInfo?.sub) return res.redirect('/?auth_error=userinfo_failed');
-
-      return res.redirect(await completeOAuthLogin(res, 'google', userInfo, checked.state));
-    } catch (err) {
-      next(err);
-    }
-  });
 
   // ── Microsoft (Entra ID) OAuth ───────────────────────────────────────────────
 
-  app.get('/auth/microsoft', async (_req, res) => {
-    if (!loadConfig().MICROSOFT_CLIENT_ID) return res.redirect('/?auth_error=microsoft_not_configured');
-    const state: OAuthState = { csrf: generateId(16), context: 'login', provider: 'microsoft' };
-    setOAuthStateCookie(res, state);
-    return res.redirect(buildMicrosoftAuthUrl(loadConfig(), state));
-  });
 
-  app.get('/auth/microsoft/callback', async (req, res, next) => {
-    try {
-      clearOAuthStateCookie(res);
-
-      if (req.query.error) return res.redirect('/?auth_error=microsoft_denied');
-      const code = req.query.code as string;
-      if (!code) return res.redirect('/?auth_error=missing_code');
-
-      const checked = checkOAuthState(req, 'microsoft');
-      if ('error' in checked) return res.redirect(checked.error);
-
-      const tokens = await exchangeMicrosoftCode(loadConfig(), code);
-      if (!tokens?.id_token) return res.redirect('/?auth_error=token_exchange_failed');
-
-      // Microsoft returns the profile in the id_token itself, so there is no
-      // second userinfo round-trip as there is for Google.
-      const userInfo = parseMicrosoftIdToken(tokens.id_token);
-      if (!userInfo?.sub) return res.redirect('/?auth_error=userinfo_failed');
-
-      return res.redirect(await completeOAuthLogin(res, 'microsoft', userInfo, checked.state));
-    } catch (err) {
-      next(err);
-    }
-  });
 
   // ── UISP SSO Callback ────────────────────────────────────────────────────────
   // The UISP bridge plugin redirects here after verifying the client session.
   // ?code=<base64url-payload>&sig=<hmac-hex>
 
-  app.get('/sso/callback', async (req, res, next) => {
-    try {
-      const code = req.query.code as string;
-      const sig = req.query.sig as string;
 
-      if (!code || !sig) return res.redirect('/?auth_error=missing_sso_params');
-
-      if (!loadConfig().UISP_SSO_SECRET) {
-        logger.error('[sso] UISP_SSO_SECRET not configured');
-        return res.redirect('/?auth_error=sso_not_configured');
-      }
-
-      const payload = verifySsoCode(loadConfig(), code, sig);
-      if (!payload) return res.redirect('/?auth_error=invalid_sso_code');
-
-      // Single-use nonce guard
-      const nonceOk = await consumeNonce(db, payload.nonce, payload.exp);
-      if (!nonceOk) return res.redirect('/?auth_error=sso_replay');
-
-      const clientId = payload.clientId;
-
-      // Fetch the CRM client to check hostedPulseNumber
-      const uispClient = await fetchUispClient(loadConfig(), clientId);
-      if (!uispClient) {
-        logger.warn(`[sso] Could not fetch UISP client ${clientId}`);
-        return res.redirect('/?auth_error=uisp_fetch_failed');
-      }
-
-      if (!uispClient.hostedPulseNumber) {
-        // Client has no Echo number configured
-        return res.sendFile(path.join(publicDir, 'no-access.html'));
-      }
-
-      const iBusinessNumber = parseInt(uispClient.hostedPulseNumber, 10);
-
-      // The bridge has already proven who this is, so the UISP login is an
-      // identity in its own right. No further credential is required.
-      const { iOrgId, iUserId, isFirstEntry } = await provisionFromCrmClient(db, {
-        clientId,
-        iBusinessNumber,
-        displayName: uispClient.displayName,
-        contactEmail: uispClient.email,
-        identity: { provider: 'uisp', subject: clientId, email: uispClient.email },
-      });
-      if (isFirstEntry) {
-        logger.info(`[sso] Provisioned org ${iOrgId} owner ${iUserId} from UISP client ${clientId}`);
-      }
-
-      const sessionId = await createFullSession(db, {
-        iUserId,
-        iOrgId,
-        iBusinessNumber,
-        role: 'owner',
-      });
-      setSessionCookie(res, sessionId);
-
-      // Offer Google linking once, as a convenience — never as a gate.
-      return res.redirect(isFirstEntry ? '/welcome' : '/');
-    } catch (err) {
-      next(err);
+  /**
+   * The ISP bridge, forwarded to identity.
+   *
+   * The UISP plugin posts its signed code at whatever URL it was configured
+   * with, and on every install that predates the move that is this one. Rather
+   * than make an ISP admin edit the plugin before their customers can sign in,
+   * the signature travels on untouched to identity, which now holds the same
+   * UISP_SSO_SECRET and does the verifying.
+   *
+   * identity checks the HMAC, burns the nonce, and — with no /authorize
+   * request of ours pending — falls back to DEFAULT_REDIRECT_URI, which points
+   * at /auth/identity/callback here. The round trip completes and the user
+   * lands signed in, having never seen this hop.
+   *
+   * Repointing the plugin straight at identity is strictly better and makes
+   * this dead code; it stays until every plugin has moved.
+   */
+  app.get('/sso/callback', (req, res) => {
+    const config = loadConfig();
+    if (!config.IDENTITY_BASE_URL) return res.redirect('/?auth_error=identity_not_configured');
+    const onward = new URL('/sso/callback', config.IDENTITY_BASE_URL);
+    for (const key of ['code', 'sig'] as const) {
+      const value = req.query[key];
+      if (typeof value === 'string') onward.searchParams.set(key, value);
     }
+    return res.redirect(onward.toString());
   });
 
   // ── Post-provisioning welcome ────────────────────────────────────────────────
@@ -588,39 +635,19 @@ export function buildApp() {
 
   // Link an additional identity to the already-signed-in user. A user may hold
   // several of either provider; any of them signs them in.
-  async function startLink(
-    req: express.Request,
-    res: express.Response,
-    provider: OAuthProvider
-  ) {
-    const session = await resolveSession(req);
-    if (!session?.iUserId) return res.redirect('/');
 
-    // Fixed allowlist — never redirect to a caller-supplied URL.
-    const allowed = ['/', '/settings', '/welcome'];
-    const requested = String(req.query.return ?? '/');
-    const returnTo = allowed.includes(requested) ? requested : '/';
 
-    const state: OAuthState = {
-      csrf: generateId(16),
-      context: 'link',
-      provider,
-      linkSessionId: session.sSessionId,
-      returnTo,
-    };
-    setOAuthStateCookie(res, state);
-    return res.redirect(
-      provider === 'google'
-        ? buildGoogleAuthUrl(loadConfig(), state)
-        : buildMicrosoftAuthUrl(loadConfig(), state)
-    );
-  }
 
-  app.get('/auth/google/link', (req, res) => startLink(req, res, 'google'));
-
-  app.get('/auth/microsoft/link', (req, res) => {
-    if (!loadConfig().MICROSOFT_CLIENT_ID) return res.redirect('/?auth_error=microsoft_not_configured');
-    return startLink(req, res, 'microsoft');
+  /**
+   * Managing which logins reach an account is identity's job, not this app's —
+   * the identities live in its database and are shared by every application on
+   * the platform. So this hands over to the place that owns them rather than
+   * keeping a second, Echo-only version of the same screen.
+   */
+  app.get(['/auth/google/link', '/auth/microsoft/link', '/auth/link'], (_req, res) => {
+    const config = loadConfig();
+    if (!config.IDENTITY_BASE_URL) return res.redirect('/?auth_error=identity_not_configured');
+    return res.redirect(new URL('/account', config.IDENTITY_BASE_URL).toString());
   });
 
   // ── Sign-in methods (own account) ────────────────────────────────────────────

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import mysql from 'mysql2/promise';
 import {
   CACHE_TTL_MS,
+  IdentitySettingsStore,
   Settings,
   SettingsUnavailableError,
   readEchoSettings,
@@ -15,8 +16,21 @@ import {
  * database. Everything else is a row in `echo_tbl_Settings` — see EchoDatabase
  * `init/009_settings.sql`.
  *
- * That is the whole of it. This app reads nothing from NocoDB, so a
- * deployment needs no NocoDB credentials to run it (#17).
+ * Two values come from IdentityBase instead, because the platform decides
+ * them once for everybody: PARENT_DOMAIN and IDENTITY_CLIENT_SECRET. See
+ * settings.ts.
+ *
+ * Every public URL follows from PARENT_DOMAIN. Echo's apps are named
+ * `<app>-echo.<parent>`, and the web app — the one people type — is plain
+ * `echo.<parent>`:
+ *
+ *     APP_BASE_URL       https://echo.<parent>
+ *     MEDIA_BASE_URL     https://media-echo.<parent>
+ *     IDENTITY_BASE_URL  https://identity.<parent>
+ *
+ * so moving the platform to a new domain is one edit rather than a hunt
+ * through rows. A row in echo_tbl_Settings still overrides any of them, for
+ * the deployment that genuinely differs; blank means "derive it".
  *
  * Nothing below carries a default. An invented `https://io.echo.wisp.net` or
  * `echo-database` is a value that looks configured and is wrong, which is
@@ -42,6 +56,12 @@ const envSchema = z.object({
   DB_USER: z.string().default(''),
   DB_PASSWORD: z.string().default(''),
   DB_NAME: z.string().default(''),
+
+  // Where to read PARENT_DOMAIN and IDENTITY_CLIENT_SECRET from. On a
+  // single-host install these arrive in identity's own bootstrap file,
+  // mounted read-only at /data — nothing to stated here.
+  NOCODB_BASE_URL: z.string().default(''),
+  NOCODB_API_TOKEN: z.string().default(''),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
@@ -87,6 +107,11 @@ export interface AppConfig extends EnvConfig {
   UISP_PLUGIN_URL: string;
   PUSHER_KEY: string;
   PUSHER_CLUSTER: string;
+  /** From IdentityBase — the platform's, not this app's. */
+  PARENT_DOMAIN: string;
+  IDENTITY_CLIENT_SECRET: string;
+  /** Derived from PARENT_DOMAIN unless a row pins it. */
+  IDENTITY_BASE_URL: string;
 }
 
 /**
@@ -103,15 +128,27 @@ function overridesFromEnv(env: NodeJS.ProcessEnv = process.env): Settings {
   return overrides;
 }
 
+let identityStore: IdentitySettingsStore | null = null;
 let snapshot: { at: number; config: AppConfig } | null = null;
 
-function assemble(env: EnvConfig, settings: Settings): AppConfig {
+/** `https://<label>.<parent>`, or '' when the platform domain is unknown. */
+function hostUnder(parent: string, label: string): string {
+  return parent ? `https://${label}.${parent}` : '';
+}
+
+function assemble(env: EnvConfig, settings: Settings, identity: Settings): AppConfig {
   const value = (key: string): string => settings[key] ?? '';
+  const parent = identity.PARENT_DOMAIN ?? '';
+  // A row wins over the derived value; blank means derive. The naming scheme
+  // is the platform's, so it lives here rather than in twelve rows.
+  const derived = (key: string, label: string): string =>
+    value(key) || hostUnder(parent, label);
   return {
     ...env,
+    // Internal, container-to-container: not a public hostname and not derived.
     ECHO_SERVICE_BASE_URL: value('ECHO_SERVICE_BASE_URL'),
-    MEDIA_BASE_URL: value('MEDIA_BASE_URL'),
-    APP_BASE_URL: value('APP_BASE_URL'),
+    MEDIA_BASE_URL: derived('MEDIA_BASE_URL', 'media-echo'),
+    APP_BASE_URL: derived('APP_BASE_URL', 'echo'),
     GOOGLE_CLIENT_ID: value('GOOGLE_CLIENT_ID'),
     GOOGLE_CLIENT_SECRET: value('GOOGLE_CLIENT_SECRET'),
     MICROSOFT_CLIENT_ID: value('MICROSOFT_CLIENT_ID'),
@@ -123,14 +160,21 @@ function assemble(env: EnvConfig, settings: Settings): AppConfig {
     UISP_PLUGIN_URL: value('UISP_PLUGIN_URL'),
     PUSHER_KEY: value('PUSHER_KEY'),
     PUSHER_CLUSTER: value('PUSHER_CLUSTER'),
+    PARENT_DOMAIN: parent,
+    IDENTITY_CLIENT_SECRET: identity.IDENTITY_CLIENT_SECRET ?? '',
+    IDENTITY_BASE_URL: value('IDENTITY_BASE_URL') || hostUnder(parent, 'identity'),
   };
 }
 
 /** Read the settings and replace the snapshot. Throws if they cannot be read. */
 export async function refreshConfig(db: mysql.Pool): Promise<AppConfig> {
   const env = loadEnv();
-  const settings = { ...(await readEchoSettings(db)), ...overridesFromEnv() };
-  const config = assemble(env, settings);
+  if (!identityStore) identityStore = new IdentitySettingsStore(env);
+  const [settings, identity] = await Promise.all([
+    readEchoSettings(db).then((rows) => ({ ...rows, ...overridesFromEnv() })),
+    identityStore.get(),
+  ]);
+  const config = assemble(env, settings, identity);
   snapshot = { at: Date.now(), config };
   return config;
 }
@@ -159,6 +203,7 @@ export function loadConfig(): AppConfig {
 /** Drop the snapshot; the retry path. */
 export function invalidateConfig(): void {
   snapshot = null;
+  identityStore?.invalidate();
 }
 
 /** Test seam: install a snapshot without touching the database. */

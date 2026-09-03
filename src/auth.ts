@@ -829,3 +829,65 @@ export async function createFullSession(
     ttlMinutes: SESSION_TTL_DAYS * 24 * 60,
   });
 }
+
+// ─── The identity service ────────────────────────────────────────────────────
+
+/** What identity's POST /api/token gives back. Mirrors its published contract. */
+export interface IdentityClaim {
+  user: {
+    iUserId: number;
+    email: string | null;
+    displayName: string | null;
+    superAdmin: boolean;
+  };
+  identity: { provider: string | null; subject: string | null };
+  identities: Array<{ provider: string; subject: string; email: string | null }>;
+}
+
+/**
+ * Redeem a one-time handoff code for the person behind it.
+ *
+ * Server to server, never through the browser: the code is worthless without
+ * the client secret, and the answer never passes through anything the user
+ * controls. identity admits this call by either its caller's IP being inside
+ * `trustedCIDR` or a matching `IDENTITY_CLIENT_SECRET` — this app is on a
+ * container network that is not inside that CIDR, so it presents the secret.
+ *
+ * Codes are single-use, expire in five minutes, and are bound to the exact
+ * `redirect_uri` they were minted for, which is why that has to be passed back
+ * rather than reconstructed loosely.
+ *
+ * Returns null on any refusal. The caller turns that into an auth error rather
+ * than a stack trace, because every failure here looks the same to the person
+ * signing in: it did not work, try again.
+ */
+export async function redeemIdentityCode(
+  config: AppConfig,
+  code: string,
+  redirectUri: string
+): Promise<IdentityClaim | null> {
+  if (!config.IDENTITY_BASE_URL) return null;
+  const url = new URL('/api/token', config.IDENTITY_BASE_URL);
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (config.IDENTITY_CLIENT_SECRET) {
+    headers['X-Client-Secret'] = config.IDENTITY_CLIENT_SECRET;
+  }
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        code,
+        redirect_uri: redirectUri,
+        // Some deployments read the secret from the body instead of a header;
+        // sending both costs nothing and removes a mode to get wrong.
+        client_secret: config.IDENTITY_CLIENT_SECRET || undefined,
+      }),
+    });
+    if (!resp.ok) return null;
+    const claim = (await resp.json()) as IdentityClaim;
+    return claim?.identity ? claim : null;
+  } catch {
+    return null;
+  }
+}
