@@ -869,8 +869,11 @@ export async function redeemIdentityCode(
   if (!config.IDENTITY_BASE_URL) return null;
   const url = new URL('/api/token', config.IDENTITY_BASE_URL);
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  // identity reads exactly this header name (presentedSecret in its app.ts);
+  // it also accepts the same value as a `client_secret` body field, and both
+  // are sent so a change to either side stays working.
   if (config.IDENTITY_CLIENT_SECRET) {
-    headers['X-Client-Secret'] = config.IDENTITY_CLIENT_SECRET;
+    headers['X-Id-Client-Secret'] = config.IDENTITY_CLIENT_SECRET;
   }
   try {
     const resp = await fetch(url, {
@@ -879,12 +882,20 @@ export async function redeemIdentityCode(
       body: JSON.stringify({
         code,
         redirect_uri: redirectUri,
-        // Some deployments read the secret from the body instead of a header;
-        // sending both costs nothing and removes a mode to get wrong.
         client_secret: config.IDENTITY_CLIENT_SECRET || undefined,
       }),
     });
-    if (!resp.ok) return null;
+    if (!resp.ok) {
+      // Worth the log line: a 403 here means identity refused the caller, not
+      // the code, and the two have very different fixes — the first is
+      // IDENTITY_APP_AUTH_MODE or the network allowlist, the second is a
+      // stale or reused code.
+      const detail = await resp.text().catch(() => '');
+      console.error(
+        `[identity] token exchange refused: ${resp.status} ${detail.slice(0, 200)}`
+      );
+      return null;
+    }
     const claim = (await resp.json()) as IdentityClaim;
     return claim?.identity ? claim : null;
   } catch {
