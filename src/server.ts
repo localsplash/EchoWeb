@@ -1,6 +1,12 @@
 import { buildApp } from './app';
 import { loadEnv, refreshConfig } from './config';
 import { getDb } from './db';
+import { applyLocalConfig } from './localConfig';
+
+// Before anything reads NOCODB_*: fold in /data/config.json, without
+// overriding what the environment already states. On a single-host install
+// that file is identity's, mounted read-only.
+applyLocalConfig();
 
 const RETRY_DELAY_MS = 5_000;
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -34,7 +40,8 @@ async function main() {
       console.error(`[settings] ${message}`);
       console.error(
         '[settings] Cannot start. Check DB_HOST/DB_USER/DB_NAME for the Echo database, ' +
-          'and that echo_tbl_Settings exists in it.'
+          'that echo_tbl_Settings exists in it, and NOCODB_BASE_URL/NOCODB_API_TOKEN ' +
+          "(or /data/config.json from identity's config volume) for PARENT_DOMAIN."
       );
       process.exit(1);
     }
