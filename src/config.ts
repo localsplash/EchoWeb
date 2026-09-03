@@ -4,18 +4,19 @@ import {
   CACHE_TTL_MS,
   Settings,
   SettingsUnavailableError,
-  TrustedNetworkStore,
   readEchoSettings,
 } from './settings';
 
 /**
  * Configuration comes from the Echo database, not from `.env`.
  *
- * The environment states how to reach the two things that cannot describe
- * themselves: the Echo database (you cannot read a database's address out of
- * that database) and the NocoDB base carrying the platform's `trustedCIDR`.
- * Everything else is a row in `echo_tbl_Settings` — see EchoDatabase
+ * The environment states the one thing that cannot describe itself: the Echo
+ * database, because you cannot read a database's address out of that
+ * database. Everything else is a row in `echo_tbl_Settings` — see EchoDatabase
  * `init/009_settings.sql`.
+ *
+ * That is the whole of it. This app reads nothing from NocoDB, so a
+ * deployment needs no NocoDB credentials to run it (#17).
  *
  * Nothing below carries a default. An invented `https://io.echo.wisp.net` or
  * `echo-database` is a value that looks configured and is wrong, which is
@@ -41,12 +42,6 @@ const envSchema = z.object({
   DB_USER: z.string().default(''),
   DB_PASSWORD: z.string().default(''),
   DB_NAME: z.string().default(''),
-
-  // Where to read the platform-wide trustedCIDR from.
-  NOCODB_BASE_URL: z.string().default(''),
-  NOCODB_API_TOKEN: z.string().default(''),
-  // ...unless this deployment pins it, in which case NocoDB is not consulted.
-  IDENTITY_TRUSTED_NETWORK: z.string().default(''),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
@@ -92,8 +87,6 @@ export interface AppConfig extends EnvConfig {
   UISP_PLUGIN_URL: string;
   PUSHER_KEY: string;
   PUSHER_CLUSTER: string;
-  /** From IdentityBase, not from echo_tbl_Settings. */
-  trustedCIDR: string;
 }
 
 /**
@@ -110,10 +103,9 @@ function overridesFromEnv(env: NodeJS.ProcessEnv = process.env): Settings {
   return overrides;
 }
 
-let trustedNetwork: TrustedNetworkStore | null = null;
 let snapshot: { at: number; config: AppConfig } | null = null;
 
-function assemble(env: EnvConfig, settings: Settings, cidr: string): AppConfig {
+function assemble(env: EnvConfig, settings: Settings): AppConfig {
   const value = (key: string): string => settings[key] ?? '';
   return {
     ...env,
@@ -131,18 +123,14 @@ function assemble(env: EnvConfig, settings: Settings, cidr: string): AppConfig {
     UISP_PLUGIN_URL: value('UISP_PLUGIN_URL'),
     PUSHER_KEY: value('PUSHER_KEY'),
     PUSHER_CLUSTER: value('PUSHER_CLUSTER'),
-    trustedCIDR: cidr,
   };
 }
 
-/** Read both sources and replace the snapshot. Throws if either cannot be read. */
+/** Read the settings and replace the snapshot. Throws if they cannot be read. */
 export async function refreshConfig(db: mysql.Pool): Promise<AppConfig> {
   const env = loadEnv();
-  if (!trustedNetwork) {
-    trustedNetwork = new TrustedNetworkStore(env, env.IDENTITY_TRUSTED_NETWORK);
-  }
   const settings = { ...(await readEchoSettings(db)), ...overridesFromEnv() };
-  const config = assemble(env, settings, await trustedNetwork.get());
+  const config = assemble(env, settings);
   snapshot = { at: Date.now(), config };
   return config;
 }
@@ -168,10 +156,9 @@ export function loadConfig(): AppConfig {
   return snapshot.config;
 }
 
-/** Drop the snapshot and the resolved IdentityBase IDs; the retry path. */
+/** Drop the snapshot; the retry path. */
 export function invalidateConfig(): void {
   snapshot = null;
-  trustedNetwork?.invalidate();
 }
 
 /** Test seam: install a snapshot without touching the database. */

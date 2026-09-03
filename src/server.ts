@@ -9,11 +9,11 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  * Read the settings or die.
  *
  * Everything this app needs beyond the database's own address — its OAuth
- * credentials, where EchoService lives, the trusted network — is a row in
- * echo_tbl_Settings, or trustedCIDR in IdentityBase. There is no fallback:
- * starting without them would mean answering every request with a fault we
- * could not explain. One retry covers the ordinary case of the database or
- * NocoDB still coming up beside us; after that, exit saying why.
+ * credentials, where EchoService lives, the public URLs — is a row in
+ * echo_tbl_Settings. There is no fallback: starting without them would mean
+ * answering every request with a fault we could not explain. One retry covers
+ * the ordinary case of the database still coming up beside us; after that,
+ * exit saying why.
  */
 async function main() {
   const env = loadEnv();
@@ -34,8 +34,7 @@ async function main() {
       console.error(`[settings] ${message}`);
       console.error(
         '[settings] Cannot start. Check DB_HOST/DB_USER/DB_NAME for the Echo database, ' +
-          'that echo_tbl_Settings exists in it, and NOCODB_BASE_URL/NOCODB_API_TOKEN for ' +
-          'the IdentityBase base that carries trustedCIDR.'
+          'and that echo_tbl_Settings exists in it.'
       );
       process.exit(1);
     }
