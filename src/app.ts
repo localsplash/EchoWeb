@@ -4,8 +4,8 @@ import https from 'https';
 import path from 'path';
 import pinoHttp from 'pino-http';
 import pino from 'pino';
-import { loadConfig, ensureFreshConfig } from './config';
-import { SettingsUnavailableError, SETTINGS_BASE_NAME } from './settings';
+import { loadConfig, loadEnv, ensureFreshConfig } from './config';
+import { SettingsUnavailableError } from './settings';
 import { getDb } from './db';
 import {
   getSessionIdFromRequest,
@@ -55,8 +55,9 @@ const publicDir = path.join(__dirname, '..', 'public');
 // ─── Session resolution ───────────────────────────────────────────────────────
 
 async function resolveSession(req: express.Request): Promise<SessionRow | null> {
-  const config = loadConfig();
-  const db = getDb(config);
+  // The pool is memoised; its coordinates come from the environment, not the
+  // settings, so this needs no snapshot.
+  const db = getDb(loadEnv());
   const id = getSessionIdFromRequest(req);
   if (!id) return null;
   return getSession(db, id);
@@ -180,9 +181,9 @@ async function provisionFromCrmClient(
 // ─── App builder ──────────────────────────────────────────────────────────────
 
 export function buildApp() {
-  const config = loadConfig();
-  const db = getDb(config);
-  const logger = pino({ level: config.LOG_LEVEL });
+  const env = loadEnv();
+  const db = getDb(env);
+  const logger = pino({ level: env.LOG_LEVEL });
   const app = express();
 
   app.use(express.json({ limit: '1mb' }));
@@ -203,7 +204,7 @@ export function buildApp() {
    * which of unreachable / missing / ambiguous it was.
    */
   app.use((_req, _res, next) => {
-    ensureFreshConfig().then(() => next(), next);
+    ensureFreshConfig(db).then(() => next(), next);
   });
 
   app.use(express.static(publicDir, { index: false }));
@@ -370,7 +371,7 @@ export function buildApp() {
       // basis for binding the account.
       let crmClient: Awaited<ReturnType<typeof findUispClientByEmail>>;
       try {
-        crmClient = await findUispClientByEmail(config, userInfo.email);
+        crmClient = await findUispClientByEmail(loadConfig(), userInfo.email);
       } catch (lookupErr) {
         // Couldn't ask — don't guess. Sending them to sign-up here would
         // invite a duplicate org for an existing subscriber.
@@ -442,7 +443,7 @@ export function buildApp() {
   app.get('/auth/google', async (_req, res) => {
     const state: OAuthState = { csrf: generateId(16), context: 'login', provider: 'google' };
     setOAuthStateCookie(res, state);
-    return res.redirect(buildGoogleAuthUrl(config, state));
+    return res.redirect(buildGoogleAuthUrl(loadConfig(), state));
   });
 
   app.get('/auth/google/callback', async (req, res, next) => {
@@ -456,7 +457,7 @@ export function buildApp() {
       const checked = checkOAuthState(req, 'google');
       if ('error' in checked) return res.redirect(checked.error);
 
-      const tokens = await exchangeGoogleCode(config, code);
+      const tokens = await exchangeGoogleCode(loadConfig(), code);
       if (!tokens?.access_token) return res.redirect('/?auth_error=token_exchange_failed');
 
       const userInfo = await getGoogleUserInfo(tokens.access_token);
@@ -471,10 +472,10 @@ export function buildApp() {
   // ── Microsoft (Entra ID) OAuth ───────────────────────────────────────────────
 
   app.get('/auth/microsoft', async (_req, res) => {
-    if (!config.MICROSOFT_CLIENT_ID) return res.redirect('/?auth_error=microsoft_not_configured');
+    if (!loadConfig().MICROSOFT_CLIENT_ID) return res.redirect('/?auth_error=microsoft_not_configured');
     const state: OAuthState = { csrf: generateId(16), context: 'login', provider: 'microsoft' };
     setOAuthStateCookie(res, state);
-    return res.redirect(buildMicrosoftAuthUrl(config, state));
+    return res.redirect(buildMicrosoftAuthUrl(loadConfig(), state));
   });
 
   app.get('/auth/microsoft/callback', async (req, res, next) => {
@@ -488,7 +489,7 @@ export function buildApp() {
       const checked = checkOAuthState(req, 'microsoft');
       if ('error' in checked) return res.redirect(checked.error);
 
-      const tokens = await exchangeMicrosoftCode(config, code);
+      const tokens = await exchangeMicrosoftCode(loadConfig(), code);
       if (!tokens?.id_token) return res.redirect('/?auth_error=token_exchange_failed');
 
       // Microsoft returns the profile in the id_token itself, so there is no
@@ -513,12 +514,12 @@ export function buildApp() {
 
       if (!code || !sig) return res.redirect('/?auth_error=missing_sso_params');
 
-      if (!config.UISP_SSO_SECRET) {
+      if (!loadConfig().UISP_SSO_SECRET) {
         logger.error('[sso] UISP_SSO_SECRET not configured');
         return res.redirect('/?auth_error=sso_not_configured');
       }
 
-      const payload = verifySsoCode(config, code, sig);
+      const payload = verifySsoCode(loadConfig(), code, sig);
       if (!payload) return res.redirect('/?auth_error=invalid_sso_code');
 
       // Single-use nonce guard
@@ -528,7 +529,7 @@ export function buildApp() {
       const clientId = payload.clientId;
 
       // Fetch the CRM client to check hostedPulseNumber
-      const uispClient = await fetchUispClient(config, clientId);
+      const uispClient = await fetchUispClient(loadConfig(), clientId);
       if (!uispClient) {
         logger.warn(`[sso] Could not fetch UISP client ${clientId}`);
         return res.redirect('/?auth_error=uisp_fetch_failed');
@@ -605,15 +606,15 @@ export function buildApp() {
     setOAuthStateCookie(res, state);
     return res.redirect(
       provider === 'google'
-        ? buildGoogleAuthUrl(config, state)
-        : buildMicrosoftAuthUrl(config, state)
+        ? buildGoogleAuthUrl(loadConfig(), state)
+        : buildMicrosoftAuthUrl(loadConfig(), state)
     );
   }
 
   app.get('/auth/google/link', (req, res) => startLink(req, res, 'google'));
 
   app.get('/auth/microsoft/link', (req, res) => {
-    if (!config.MICROSOFT_CLIENT_ID) return res.redirect('/?auth_error=microsoft_not_configured');
+    if (!loadConfig().MICROSOFT_CLIENT_ID) return res.redirect('/?auth_error=microsoft_not_configured');
     return startLink(req, res, 'microsoft');
   });
 
@@ -773,7 +774,7 @@ export function buildApp() {
   app.get('/api/conversations', async (req, res, next) => {
     try {
       const session = await resolveSession(req);
-      const result = await proxyEchoService(config, session, '/api/conversations', 'GET');
+      const result = await proxyEchoService(loadConfig(), session, '/api/conversations', 'GET');
       return res.status(result.status).json(result.data);
     } catch (error) {
       next(error);
@@ -784,7 +785,7 @@ export function buildApp() {
     try {
       const session = await resolveSession(req);
       const result = await proxyEchoService(
-        config,
+        loadConfig(),
         session,
         `/api/conversations/${encodeURIComponent(req.params.customer)}/messages`,
         'GET'
@@ -799,7 +800,7 @@ export function buildApp() {
     try {
       const session = await resolveSession(req);
       const result = await proxyEchoService(
-        config,
+        loadConfig(),
         session,
         `/api/conversations/${encodeURIComponent(req.params.customer)}/read`,
         'POST'
@@ -814,7 +815,7 @@ export function buildApp() {
     try {
       const session = await resolveSession(req);
       const result = await proxyEchoService(
-        config,
+        loadConfig(),
         session,
         `/api/conversations/${encodeURIComponent(req.params.customer)}/mark-unread`,
         'POST'
@@ -829,7 +830,7 @@ export function buildApp() {
     try {
       const session = await resolveSession(req);
       const result = await proxyEchoService(
-        config,
+        loadConfig(),
         session,
         `/api/messages/${encodeURIComponent(req.params.messageId)}`,
         'DELETE'
@@ -844,7 +845,7 @@ export function buildApp() {
     try {
       const session = await resolveSession(req);
       const result = await proxyEchoService(
-        config,
+        loadConfig(),
         session,
         `/api/conversations/${encodeURIComponent(req.params.customer)}`,
         'DELETE'
@@ -865,7 +866,7 @@ export function buildApp() {
             : [],
         };
         return proxyEchoService(
-          config,
+          loadConfig(),
           session,
           `/api/conversations/${encodeURIComponent(req.params.customer)}/send`,
           'POST',
@@ -886,7 +887,7 @@ export function buildApp() {
 
       const targetUrl = new URL(
         `/api/drafts/${encodeURIComponent(req.params.customer)}/media`,
-        config.ECHO_SERVICE_BASE_URL
+        loadConfig().ECHO_SERVICE_BASE_URL
       );
       targetUrl.searchParams.set('businessNumber', String(business));
 
@@ -919,7 +920,7 @@ export function buildApp() {
     try {
       const session = await resolveSession(req);
       const result = await proxyEchoService(
-        config,
+        loadConfig(),
         session,
         `/api/drafts/${encodeURIComponent(req.params.customer)}/media`,
         'GET'
@@ -934,7 +935,7 @@ export function buildApp() {
     try {
       const session = await resolveSession(req);
       const result = await proxyEchoService(
-        config,
+        loadConfig(),
         session,
         `/api/drafts/${encodeURIComponent(req.params.customer)}/media/${encodeURIComponent(req.params.draftMediaId)}`,
         'DELETE'
@@ -950,7 +951,7 @@ export function buildApp() {
   app.get('/api/carriers', async (req, res, next) => {
     try {
       const session = await resolveSession(req);
-      const result = await proxyDirect(config, session, '/api/carriers', 'GET');
+      const result = await proxyDirect(loadConfig(), session, '/api/carriers', 'GET');
       return res.status(result.status).json(result.data);
     } catch (error) {
       next(error);
@@ -960,7 +961,7 @@ export function buildApp() {
   app.get('/api/carrier-applications', async (req, res, next) => {
     try {
       const session = await resolveSession(req);
-      const result = await proxyDirect(config, session, '/api/carrier-applications', 'GET');
+      const result = await proxyDirect(loadConfig(), session, '/api/carrier-applications', 'GET');
       return res.status(result.status).json(result.data);
     } catch (error) {
       next(error);
@@ -971,7 +972,7 @@ export function buildApp() {
     try {
       const session = await resolveSession(req);
       const result = await proxyDirect(
-        config,
+        loadConfig(),
         session,
         `/api/carrier-applications/${encodeURIComponent(req.params.id)}`,
         'GET'
@@ -986,7 +987,7 @@ export function buildApp() {
     try {
       const session = await resolveSession(req);
       const result = await proxyDirect(
-        config,
+        loadConfig(),
         session,
         '/api/carrier-applications',
         'POST',
@@ -1002,7 +1003,7 @@ export function buildApp() {
     try {
       const session = await resolveSession(req);
       const result = await proxyDirect(
-        config,
+        loadConfig(),
         session,
         `/api/carrier-applications/${encodeURIComponent(req.params.id)}`,
         'PUT',
@@ -1020,7 +1021,7 @@ export function buildApp() {
       const business = session?.iBusinessNumber;
       if (!business) return res.status(401).json({ error: 'Not logged in' });
       const result = await proxyDirect(
-        config,
+        loadConfig(),
         session,
         `/api/business-phones/${business}`,
         'GET'
@@ -1036,7 +1037,7 @@ export function buildApp() {
       const session = await resolveSession(req);
       const business = session?.iBusinessNumber;
       if (!business) return res.status(401).json({ error: 'Not logged in' });
-      const result = await proxyDirect(config, session, '/api/business-phones', 'POST', {
+      const result = await proxyDirect(loadConfig(), session, '/api/business-phones', 'POST', {
         ...req.body,
         iBusinessNumber: business,
       });
@@ -1059,11 +1060,7 @@ export function buildApp() {
       // A settings store that cannot answer is a configuration fault, and
       // saying so beats a 500 that reads as an application fault.
       if (err instanceof SettingsUnavailableError) {
-        return res.status(503).json({
-          error: err.message,
-          reason: err.reason,
-          base: SETTINGS_BASE_NAME,
-        });
+        return res.status(503).json({ error: err.message, reason: err.reason });
       }
       res.status(500).json({ error: 'Internal server error' });
     }
