@@ -37,15 +37,40 @@ function formatPhoneField(el) {
   else el.value = '(' + d.slice(0, 3) + ') ' + d.slice(3, 6) + '-' + d.slice(6);
 }
 
+// Conversation list: one short line in a narrow column, so the date alone is
+// enough — the thread is one tap away for the detail.
 function formatTime(dt) {
   if (!dt) return '';
   const d = new Date(dt);
   if (isNaN(d)) return dt;
   const now = new Date();
-  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (d.toDateString() === now.toDateString()) return clockTime(d);
   const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
   if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+function clockTime(d) {
+  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+// Message bubbles: always carry a clock time. "Yesterday" on its own says
+// nothing about whether a customer wrote at 9am or 11pm, which is exactly what
+// you want to know when reading a thread back (#14).
+function formatMessageTime(dt) {
+  if (!dt) return '';
+  const d = new Date(dt);
+  if (isNaN(d)) return dt;
+  const time = clockTime(d);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) return time;
+  const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday ' + time;
+  const sameYear = d.getFullYear() === now.getFullYear();
+  const date = d.toLocaleDateString([], sameYear
+    ? { month: 'short', day: 'numeric' }
+    : { month: 'short', day: 'numeric', year: 'numeric' });
+  return date + ', ' + time;
 }
 
 function formatFileSize(bytes) {
@@ -231,11 +256,15 @@ async function loadConversations() {
     draftingNew = false;
     currentCustomer = null;
     setThreadHeader();
+    stopLiveUpdates('session expired');
     return;
   }
   if (!r.ok) { console.error('Failed to load conversations', r.status); return; }
   const data = await r.json();
   const root = document.getElementById('conversations');
+  // A background refresh redraws this list; someone scrolled down it should
+  // not be thrown back to the top every thirty seconds.
+  const listScroll = root.scrollTop;
   root.innerHTML = '';
 
   for (const c of data.items) {
@@ -290,6 +319,8 @@ async function loadConversations() {
     if (isUnread) el.appendChild(badge);
     root.appendChild(el);
   }
+
+  root.scrollTop = listScroll;
 }
 
 /* ── Thread menu ── */
@@ -417,9 +448,32 @@ async function openConversation(customer, skipRead) {
   const r = await fetch('/api/conversations/' + customer + '/messages');
   const data = await r.json();
   const box = document.getElementById('messages');
-  box.innerHTML = '';
+  renderMessages(customer, data.items || [], box);
+  box.scrollTop = box.scrollHeight;
+  document.getElementById('compose').style.display = 'flex';
 
-  for (const m of data.items) {
+  if (!skipRead) {
+    await fetch('/api/conversations/' + customer + '/read', { method: 'POST' });
+    await loadConversations();
+  }
+}
+
+/**
+ * Draw a thread's messages into `box`.
+ *
+ * Split out of openConversation so a background refresh can redraw the
+ * transcript without going anywhere near the composer — no draft text, no
+ * attachments, no read-marking. See refreshOpenThread().
+ */
+function renderMessages(customer, items, box) {
+  box.innerHTML = '';
+  // Drawing is the one place that knows what is on screen, so it is the place
+  // that records it — the refresh path compares against this to decide whether
+  // a redraw is needed at all.
+  threadSignature = signatureOf(items);
+  threadMessageIds = new Set(items.map((m) => m.iMessageId));
+
+  for (const m of items) {
     const isInbound = Number(m.bInbound) === 1;
     const wrapper = document.createElement('div');
     wrapper.className = 'flex flex-col max-w-[75%] md:max-w-[65%] msg-anim'
@@ -454,7 +508,12 @@ async function openConversation(customer, skipRead) {
 
     const timeEl = document.createElement('span');
     timeEl.className = 'text-[11px] text-slate-400';
-    timeEl.textContent = formatTime(m.dtCreated);
+    timeEl.textContent = formatMessageTime(m.dtCreated);
+    // The full date and time, for anything the short form leaves out.
+    if (m.dtCreated) {
+      const exact = new Date(m.dtCreated);
+      if (!isNaN(exact)) timeEl.title = exact.toLocaleString();
+    }
 
     const status = statusForEvent(m.eMessageEventTypeID);
     let detailEl = null;
@@ -511,14 +570,6 @@ async function openConversation(customer, skipRead) {
     wrapper.appendChild(meta);
     if (detailEl) wrapper.appendChild(detailEl);
     box.appendChild(wrapper);
-  }
-
-  box.scrollTop = box.scrollHeight;
-  document.getElementById('compose').style.display = 'flex';
-
-  if (!skipRead) {
-    await fetch('/api/conversations/' + customer + '/read', { method: 'POST' });
-    await loadConversations();
   }
 }
 
@@ -822,26 +873,34 @@ document.getElementById('compose').addEventListener('submit', async (e) => {
   }
 
   const draftMediaIds = pendingDraftMedia.filter(m => m.status === 'ready' && m.draftMediaId).map(m => m.draftMediaId);
-  const r = await fetch('/api/conversations/' + to + '/send', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ text: txt.value, draftMediaIds })
-  });
 
-  const data = await r.json();
-  if (data && data.ok === false) {
-    // Keep the composer as-is so the user can edit and retry — draft media
-    // rows on the server are untouched when send fails, and the Bandwidth
-    // URLs haven't been committed.
-    alert('Carrier failure: ' + (typeof data.details === 'string' ? data.details : JSON.stringify(data.details)));
-    return;
+  // Hold the background refresh off for the duration of the send, so it cannot
+  // redraw the thread from between the POST and the reload below.
+  sending = true;
+  try {
+    const r = await fetch('/api/conversations/' + to + '/send', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: txt.value, draftMediaIds })
+    });
+
+    const data = await r.json();
+    if (data && data.ok === false) {
+      // Keep the composer as-is so the user can edit and retry — draft media
+      // rows on the server are untouched when send fails, and the Bandwidth
+      // URLs haven't been committed.
+      alert('Carrier failure: ' + (typeof data.details === 'string' ? data.details : JSON.stringify(data.details)));
+      return;
+    }
+    txt.value = '';
+    txt.style.height = 'auto';
+    clearAttachments();
+    localStorage.removeItem('draft-' + to);
+    await openConversation(to, true);
+    await loadConversations();
+  } finally {
+    sending = false;
   }
-  txt.value = '';
-  txt.style.height = 'auto';
-  clearAttachments();
-  localStorage.removeItem('draft-' + to);
-  await openConversation(to, true);
-  await loadConversations();
 });
 
 /* ── Draft saving ── */
@@ -893,8 +952,222 @@ async function loadBusinessIdentity() {
   } catch (_) { /* non-fatal */ }
 }
 
+/* ── Live updates (#3) ──
+
+   Two mechanisms, one refresh path.
+
+   Polling (#15) is the floor: every 30 seconds, ask for the conversation list
+   and redraw the open thread. It needs nothing from anyone and works on any
+   deployment.
+
+   Pusher (#16) sits on top: when EchoService announces a message the refresh
+   runs immediately instead of up to 30 seconds later, and the poll backs off
+   to a slow heartbeat. Lose the socket and the poll returns to 30 seconds, so
+   the worst case is the behaviour of #15 rather than nothing.
+
+   The rule both obey: a refresh redraws the transcript and the list, and
+   touches nothing else. Not the composer, not its caret, not the pending
+   attachments, not the scroll position of someone reading history. Someone
+   halfway through a sentence should not be able to tell that any of this
+   happened. */
+
+const POLL_INTERVAL_MS = 30_000;
+// While the socket is up, the poll is only a safety net against a missed
+// event — it does not need to run at conversational speed.
+const POLL_INTERVAL_PUSH_MS = 5 * 60_000;
+
+let pollTimer = null;
+let refreshTimer = null;
+let pollInFlight = false;
+let liveUpdatesStopped = false;
+let sending = false;
+let pusherConnected = false;
+let pusherClient = null;
+// What is currently on screen, so an unchanged thread is left alone rather
+// than redrawn — a redraw restarts the bubble animation and would flicker
+// every 30 seconds for no reason.
+let threadSignature = '';
+let threadMessageIds = new Set();
+
+function signatureOf(items) {
+  return items
+    .map((m) => [m.iMessageId, m.eMessageEventTypeID, (m.media || []).length].join(':'))
+    .join('|');
+}
+
+/** Refresh the open thread in place. Returns true when it actually redrew. */
+async function refreshOpenThread() {
+  if (!currentCustomer || draftingNew) return false;
+
+  const box = document.getElementById('messages');
+  // On a phone the thread panel is swapped out for the list, and currentCustomer
+  // stays set behind it. With no layout there is no answer to "were they
+  // scrolled to the bottom", and nobody is reading the thread — so leave it
+  // alone and let the list refresh carry the news. Reopening draws it fresh.
+  if (box.clientHeight === 0) return false;
+
+  const customer = String(currentCustomer);
+  const r = await fetch('/api/conversations/' + customer + '/messages');
+  if (!r.ok) return false;
+  const data = await r.json();
+  const items = data.items || [];
+
+  // The thread may have been switched, or a new draft started, while that
+  // request was in flight — drawing these messages now would put them in the
+  // wrong conversation.
+  if (String(currentCustomer) !== customer || draftingNew) return false;
+  if (signatureOf(items) === threadSignature) return false;
+
+  const seenBefore = threadMessageIds;
+  // Someone scrolled up is reading; only follow the bottom if they were
+  // already there.
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  const previousScroll = box.scrollTop;
+
+  renderMessages(customer, items, box);
+  box.scrollTop = atBottom ? box.scrollHeight : previousScroll;
+
+  // A message that arrived in the thread the user is looking at, in a tab they
+  // are looking at, has been read in every sense that matters — leaving the
+  // badge on would mark the conversation on screen as unread. This is the one
+  // piece of state a refresh writes, and only under those conditions.
+  const newInbound = items.some(
+    (m) => Number(m.bInbound) === 1 && !seenBefore.has(m.iMessageId)
+  );
+  if (newInbound && !document.hidden && seenBefore.size > 0) {
+    await fetch('/api/conversations/' + customer + '/read', { method: 'POST' });
+  }
+  return true;
+}
+
+async function pollTick() {
+  if (liveUpdatesStopped || document.hidden || pollInFlight || sending) return;
+  pollInFlight = true;
+  try {
+    await refreshOpenThread();
+    await loadConversations();
+  } catch (error) {
+    // A dropped connection or a 5xx is a reason to try again in 30 seconds,
+    // not to put an error in front of someone who is typing.
+    console.debug('[live] refresh failed, will retry', error);
+  } finally {
+    pollInFlight = false;
+  }
+}
+
+function scheduleNextPoll() {
+  clearTimeout(pollTimer);
+  if (liveUpdatesStopped) return;
+  const delay = pusherConnected ? POLL_INTERVAL_PUSH_MS : POLL_INTERVAL_MS;
+  pollTimer = setTimeout(() => {
+    pollTick().finally(scheduleNextPoll);
+  }, delay);
+}
+
+/** Refresh at the next opportunity, coalescing a burst of events into one. */
+function refreshNow() {
+  if (liveUpdatesStopped) return;
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => {
+    clearTimeout(pollTimer);
+    pollTick().finally(scheduleNextPoll);
+  }, 250);
+}
+
+function stopLiveUpdates(reason) {
+  if (liveUpdatesStopped) return;
+  liveUpdatesStopped = true;
+  clearTimeout(pollTimer);
+  clearTimeout(refreshTimer);
+  if (pusherClient) {
+    try { pusherClient.disconnect(); } catch (_) { /* already gone */ }
+    pusherClient = null;
+  }
+  console.debug('[live] stopped:', reason);
+}
+
+// A background tab has nobody reading it. Stop, and catch up in one go on the
+// way back rather than replaying every tick that was missed.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    clearTimeout(pollTimer);
+    return;
+  }
+  refreshNow();
+});
+
+/* ── Pusher (#16) ── */
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const el = document.createElement('script');
+    el.src = src;
+    el.onload = resolve;
+    el.onerror = () => reject(new Error('failed to load ' + src));
+    document.head.appendChild(el);
+  });
+}
+
+function socketLost() {
+  if (!pusherConnected) return;
+  pusherConnected = false;
+  // Back to the 30-second floor immediately, rather than after the long
+  // heartbeat that was scheduled while the socket was healthy.
+  scheduleNextPoll();
+}
+
+async function startLiveSocket() {
+  const key = window.ECHO_CONFIG && window.ECHO_CONFIG.PUSHER_KEY;
+  // No Pusher configured is a supported deployment, not a failure: the poll
+  // above is already running and is the whole feature on its own.
+  if (!key) return;
+
+  try {
+    const r = await fetch('/api/me');
+    if (!r.ok) return;
+    const me = await r.json();
+    if (!me.iBusinessNumber) return;
+
+    await loadScript('https://js.pusher.com/8.2.0/pusher.min.js');
+    if (typeof Pusher === 'undefined') return;
+
+    pusherClient = new Pusher(key, {
+      cluster: (window.ECHO_CONFIG && window.ECHO_CONFIG.PUSHER_CLUSTER) || 'mt1',
+      // Signed by EchoService, which checks the session owns this business
+      // number before it will authorize the channel. The browser never holds
+      // a Pusher secret.
+      authEndpoint: '/api/pusher/auth',
+    });
+
+    pusherClient.connection.bind('connected', () => {
+      pusherConnected = true;
+      scheduleNextPoll();
+      console.debug('[live] socket connected; poll backed off');
+    });
+    for (const state of ['disconnected', 'unavailable', 'failed']) {
+      pusherClient.connection.bind(state, socketLost);
+    }
+    pusherClient.connection.bind('error', socketLost);
+
+    const channel = pusherClient.subscribe('private-echo-' + me.iBusinessNumber);
+    channel.bind('message:new', refreshNow);
+    channel.bind('message:status', refreshNow);
+    channel.bind('pusher:subscription_error', (status) => {
+      // Until EchoService#3 ships there is nothing to authorize against, so
+      // this is the expected path. Polling carries the feature meanwhile.
+      console.debug('[live] channel subscription refused, staying on poll', status);
+      socketLost();
+    });
+  } catch (error) {
+    console.debug('[live] socket unavailable, staying on poll', error);
+    socketLost();
+  }
+}
+
 /* ── Init ── */
 
 setThreadHeader();
 loadConversations();
 loadBusinessIdentity();
+scheduleNextPoll();
+startLiveSocket();

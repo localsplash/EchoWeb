@@ -69,6 +69,12 @@ export const SETTING_KEYS = [
   'UISP_CRM_APP_KEY_READ',
   'UISP_SSO_SECRET',
   'UISP_PLUGIN_URL',
+  // Real-time updates (#16). Only the two public halves — the app id and the
+  // secret belong to EchoService, which is what publishes and what signs
+  // channel authorizations. Both blank is a supported deployment: the browser
+  // falls back to the 30-second poll (#15).
+  'PUSHER_KEY',
+  'PUSHER_CLUSTER',
 ] as const;
 
 export interface AppConfig extends EnvConfig {
@@ -84,6 +90,8 @@ export interface AppConfig extends EnvConfig {
   UISP_CRM_APP_KEY_READ: string;
   UISP_SSO_SECRET: string;
   UISP_PLUGIN_URL: string;
+  PUSHER_KEY: string;
+  PUSHER_CLUSTER: string;
   /** From IdentityBase, not from echo_tbl_Settings. */
   trustedCIDR: string;
 }
@@ -121,6 +129,8 @@ function assemble(env: EnvConfig, settings: Settings, cidr: string): AppConfig {
     UISP_CRM_APP_KEY_READ: value('UISP_CRM_APP_KEY_READ'),
     UISP_SSO_SECRET: value('UISP_SSO_SECRET'),
     UISP_PLUGIN_URL: value('UISP_PLUGIN_URL'),
+    PUSHER_KEY: value('PUSHER_KEY'),
+    PUSHER_CLUSTER: value('PUSHER_CLUSTER'),
     trustedCIDR: cidr,
   };
 }
