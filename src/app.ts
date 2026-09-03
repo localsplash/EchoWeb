@@ -258,22 +258,6 @@ export function buildApp() {
 
   // ── OAuth sign-in (Google, Microsoft) ────────────────────────────────────────
 
-  /**
-   * A wisp.net address is what grants super-admin, so it has to mean something,
-   * and Google is the only provider trusted to assert one — it verifies the
-   * Workspace domain it reports. Entra does not: with a 'common' authority the
-   * address is whatever the user's own tenant put there, so any directory on
-   * earth could mint an @wisp.net user. wisp.net staff stay on Google, so
-   * Microsoft never reaches this branch.
-   *
-   * A wisp.net person who signs in with Microsoft is therefore treated as an
-   * ordinary user; having no membership, they are turned away rather than
-   * silently downgraded into someone else's org.
-   */
-  function isWispStaff(provider: OAuthProvider, userInfo: OAuthUserInfo): boolean {
-    if (provider !== 'google') return false;
-    return userInfo.email?.toLowerCase().endsWith('@wisp.net') || userInfo.hd === 'wisp.net';
-  }
 
   /**
    * Validate the returned OAuth state against the cookie we set before leaving.
@@ -317,10 +301,19 @@ export function buildApp() {
     res: express.Response,
     provider: OAuthProvider,
     userInfo: OAuthUserInfo,
-    storedState: OAuthState
+    storedState: OAuthState,
+    superAdmin: boolean
   ): Promise<string> {
     // ── Super-admin path ───────────────────────────────────────────────────
-    if (isWispStaff(provider, userInfo)) {
+    //
+    // `superAdmin` is identity's claim, not a rule of ours. It computes it at
+    // login from SUPERADMIN_DOMAIN (falling back to PARENT_DOMAIN) and only
+    // for a provider that actually vouches for the domain — the same care this
+    // app used to take by hand for @wisp.net on Google alone, but decided once
+    // for the whole platform instead of once per app. It rides on the one-time
+    // code and is never recomputed from the address at redemption, so a
+    // forwarded address cannot become a privilege here.
+    if (superAdmin) {
       let iUserId = await findUserByIdentity(db, provider, userInfo.sub);
       if (!iUserId) {
         // Auto-link by address: the provider has vouched for this one.
@@ -525,7 +518,8 @@ export function buildApp() {
         res,
         provider as OAuthProvider,
         userInfo,
-        stored ?? { csrf: '', context: 'login', provider: provider as OAuthProvider }
+        stored ?? { csrf: '', context: 'login', provider: provider as OAuthProvider },
+        claim.user.superAdmin === true
       );
       return res.redirect(dest);
     } catch (err) {
