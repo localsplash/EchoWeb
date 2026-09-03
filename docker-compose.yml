@@ -2,7 +2,7 @@
 #
 # EchoWeb reads its settings from echo_tbl_Settings in the Echo database.
 # What is stated here is only what cannot describe itself: how to reach that
-# database, and how to reach the IdentityBase base carrying trustedCIDR.
+# database. Nothing is read from NocoDB, so no token is needed to run this.
 services:
   echo-web:
     build: .
@@ -14,10 +14,6 @@ services:
       DB_USER: ${DB_USER:-echo_app}
       DB_PASSWORD: ${DB_PASSWORD:-devpass}
       DB_NAME: ${DB_NAME:-echo_db}
-      NOCODB_BASE_URL: ${NOCODB_BASE_URL:-http://host.docker.internal:18090}
-      NOCODB_API_TOKEN: ${NOCODB_API_TOKEN:-}
-      # Pin the trusted network instead of reading it from NocoDB.
-      IDENTITY_TRUSTED_NETWORK: ${IDENTITY_TRUSTED_NETWORK:-}
     ports:
       - "127.0.0.1:3160:3160"
     restart: unless-stopped
