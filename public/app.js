@@ -6,6 +6,9 @@ const MAX_FILES = 10;
 
 let currentCustomer = null;
 let draftingNew = false;
+// The most recent /api/conversations payload. Search matches numbers against
+// it directly, so a phone-number query costs no requests at all.
+let conversationItems = [];
 // Array of draft media entries for the active conversation.
 // Each entry: { draftMediaId?, displayName, contentType, contentLength,
 //   storagePath?, thumbnailPath?, status: 'uploading'|'ready'|'error',
@@ -236,6 +239,9 @@ async function logout() {
 function startNew() {
   draftingNew = true;
   currentCustomer = null;
+  // Belt and braces with the clear on send: a draft abandoned without sending
+  // leaves a number behind too, and a new one should start empty either way.
+  document.getElementById('customerInput').value = '';
   var msgs = document.getElementById('messages');
   msgs.innerHTML = '<div id="emptyState" class="m-auto text-center py-12"><p class="text-slate-400 text-sm">Enter a customer number and start typing</p></div>';
   document.getElementById('compose').style.display = 'flex';
@@ -261,6 +267,7 @@ async function loadConversations() {
   }
   if (!r.ok) { console.error('Failed to load conversations', r.status); return; }
   const data = await r.json();
+  conversationItems = data.items || [];
   const root = document.getElementById('conversations');
   // A background refresh redraws this list; someone scrolled down it should
   // not be thrown back to the top every thirty seconds.
@@ -322,6 +329,261 @@ async function loadConversations() {
 
   root.scrollTop = listScroll;
 }
+
+/* ── Search (#5) ──
+
+   Two things are searchable: the customer number, and the text of the messages
+   themselves.
+
+   Numbers are free — the conversation list is already in memory, so a digit
+   query filters it without touching the network. Message text is not: it lives
+   one request per conversation behind /api/conversations/:customer/messages,
+   and EchoService has no search endpoint. So a keyword query walks the
+   conversations newest-first, in small batches, and caches each transcript
+   until that conversation changes — a second query costs nothing, and typing
+   one more letter re-filters what has already been fetched.
+
+   The scan is capped. A mailbox with thousands of conversations should not turn
+   one keystroke into thousands of requests, so the newest SEARCH_MAX_CONVERSATIONS
+   are searched and the results say when older ones were left out. */
+
+const SEARCH_DEBOUNCE_MS = 250;
+const SEARCH_MIN_QUERY = 2;
+const SEARCH_CONCURRENCY = 6;
+const SEARCH_MAX_CONVERSATIONS = 300;
+// Characters of context either side of a hit, so a snippet reads as a sentence
+// rather than as the search term.
+const SEARCH_SNIPPET_PAD = 48;
+
+let searchDebounce = null;
+// Bumped on every run. A run that finds itself holding a stale token stops
+// rendering: the answer to a query nobody is asking any more.
+let searchToken = 0;
+// customer -> { lastAt, items }. lastAt comes from the conversation row, so a
+// new message in a conversation invalidates exactly that conversation.
+const searchMessageCache = new Map();
+
+function onSearchInput() {
+  const el = document.getElementById('searchInput');
+  document.getElementById('searchClear').classList.toggle('hidden', el.value === '');
+  clearTimeout(searchDebounce);
+  const value = el.value;
+  searchDebounce = setTimeout(() => runSearch(value), SEARCH_DEBOUNCE_MS);
+}
+
+function clearSearch() {
+  const el = document.getElementById('searchInput');
+  el.value = '';
+  document.getElementById('searchClear').classList.add('hidden');
+  clearTimeout(searchDebounce);
+  searchToken++;
+  showSearchResults(false);
+  el.focus();
+}
+
+function showSearchResults(on) {
+  document.getElementById('searchResults').classList.toggle('hidden', !on);
+  document.getElementById('conversations').classList.toggle('hidden', on);
+}
+
+function searchHeading(text) {
+  const el = document.createElement('div');
+  el.className = 'px-4 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400';
+  el.textContent = text;
+  return el;
+}
+
+function searchNote(text) {
+  const el = document.createElement('div');
+  el.className = 'px-4 py-3 text-sm text-slate-400';
+  el.textContent = text;
+  return el;
+}
+
+/**
+ * Append `text` to `el` with every occurrence of `needle` wrapped in <mark>.
+ * Built out of nodes rather than a string of HTML: the text is a customer's,
+ * and it never becomes markup on the way to the screen.
+ */
+function appendHighlighted(el, text, needle) {
+  const hay = String(text || '');
+  const lowerHay = hay.toLowerCase();
+  const lowerNeedle = String(needle || '').toLowerCase();
+  if (!lowerNeedle) {
+    el.appendChild(document.createTextNode(hay));
+    return;
+  }
+  let from = 0;
+  for (;;) {
+    const at = lowerHay.indexOf(lowerNeedle, from);
+    if (at === -1) break;
+    if (at > from) el.appendChild(document.createTextNode(hay.slice(from, at)));
+    const mark = document.createElement('mark');
+    mark.className = 'bg-amber-200 text-slate-900 rounded px-0.5';
+    mark.textContent = hay.slice(at, at + lowerNeedle.length);
+    el.appendChild(mark);
+    from = at + lowerNeedle.length;
+  }
+  if (from < hay.length) el.appendChild(document.createTextNode(hay.slice(from)));
+}
+
+/** The stretch of `text` around the first hit, with ellipses where it was cut. */
+function snippetAround(text, needle) {
+  const hay = String(text || '');
+  const at = hay.toLowerCase().indexOf(String(needle).toLowerCase());
+  if (at === -1) return hay;
+  const start = Math.max(0, at - SEARCH_SNIPPET_PAD);
+  const end = Math.min(hay.length, at + needle.length + SEARCH_SNIPPET_PAD);
+  return (start > 0 ? '…' : '') + hay.slice(start, end) + (end < hay.length ? '…' : '');
+}
+
+function searchRow() {
+  const el = document.createElement('div');
+  el.className = 'px-4 py-3 border-b border-slate-100 cursor-pointer hover:bg-slate-50 active:bg-slate-100 transition-colors';
+  return el;
+}
+
+function searchRowHeader(number, when) {
+  const top = document.createElement('div');
+  top.className = 'flex items-baseline justify-between gap-2';
+
+  const num = document.createElement('span');
+  num.className = 'text-sm font-semibold text-slate-800 truncate';
+  num.textContent = formatPhoneNumber(number);
+
+  const time = document.createElement('span');
+  time.className = 'text-xs text-slate-400 flex-shrink-0';
+  time.textContent = formatTime(when);
+
+  top.appendChild(num);
+  top.appendChild(time);
+  return top;
+}
+
+/** A conversation whose number matched. */
+function conversationHitRow(c) {
+  const el = searchRow();
+  el.onclick = () => openConversation(c.iCustomerNumber);
+  el.appendChild(searchRowHeader(c.iCustomerNumber, c.lastAt));
+
+  const preview = document.createElement('div');
+  preview.className = 'text-sm text-slate-500 truncate mt-0.5';
+  preview.textContent = c.lastText || '';
+  el.appendChild(preview);
+  return el;
+}
+
+/** A single message whose text matched. */
+function messageHitRow(c, m, needle) {
+  const el = searchRow();
+  el.onclick = () => openSearchHit(c.iCustomerNumber, m.iMessageId);
+  el.appendChild(searchRowHeader(c.iCustomerNumber, m.dtCreated));
+
+  const snippet = document.createElement('div');
+  snippet.className = 'text-sm text-slate-600 mt-0.5 line-clamp-2';
+  appendHighlighted(snippet, snippetAround(m.text, needle), needle);
+  el.appendChild(snippet);
+
+  const who = document.createElement('div');
+  who.className = 'text-[11px] text-slate-400 mt-1';
+  who.textContent = Number(m.bInbound) === 1 ? 'Received' : 'Sent';
+  el.appendChild(who);
+  return el;
+}
+
+/** Open a conversation and put the matched message on screen. */
+async function openSearchHit(customer, messageId) {
+  await openConversation(customer);
+  const el = document.querySelector('#messages [data-message-id="' + messageId + '"]');
+  if (!el) return;
+  el.scrollIntoView({ block: 'center' });
+  const ring = ['ring-2', 'ring-amber-300', 'rounded-2xl'];
+  el.classList.add(...ring);
+  setTimeout(() => el.classList.remove(...ring), 2000);
+}
+
+/** A conversation's messages, from cache when it hasn't moved since last time. */
+async function searchMessagesFor(c) {
+  const key = String(c.iCustomerNumber);
+  const cached = searchMessageCache.get(key);
+  if (cached && cached.lastAt === c.lastAt) return cached.items;
+
+  const r = await fetch('/api/conversations/' + encodeURIComponent(key) + '/messages');
+  if (!r.ok) return cached ? cached.items : [];
+  const data = await r.json();
+  const items = data.items || [];
+  searchMessageCache.set(key, { lastAt: c.lastAt, items });
+  return items;
+}
+
+async function runSearch(raw) {
+  const q = String(raw || '').trim();
+  const token = ++searchToken;
+  const results = document.getElementById('searchResults');
+
+  if (q.length < SEARCH_MIN_QUERY) {
+    results.innerHTML = '';
+    showSearchResults(false);
+    return;
+  }
+
+  showSearchResults(true);
+  results.innerHTML = '';
+
+  // Numbers first, and instantly: the list is already here.
+  const digits = q.replace(/\D/g, '');
+  const numberHits = digits.length >= 3
+    ? conversationItems.filter(c => String(c.iCustomerNumber).replace(/\D/g, '').includes(digits))
+    : [];
+  if (numberHits.length) {
+    results.appendChild(searchHeading('Conversations'));
+    for (const c of numberHits) results.appendChild(conversationHitRow(c));
+  }
+
+  results.appendChild(searchHeading('Messages'));
+  // Rows are inserted before this element, so it stays at the bottom as the
+  // running status and then becomes the summary.
+  const status = searchNote('Searching…');
+  results.appendChild(status);
+
+  const scanned = conversationItems.slice(0, SEARCH_MAX_CONVERSATIONS);
+  let hits = 0;
+
+  // Newest-first, a batch at a time: results appear while the rest is still
+  // being fetched, and in the same order as the conversation list.
+  for (let i = 0; i < scanned.length; i += SEARCH_CONCURRENCY) {
+    if (token !== searchToken) return;
+    const batch = scanned.slice(i, i + SEARCH_CONCURRENCY);
+    const fetched = await Promise.all(
+      batch.map(c => searchMessagesFor(c).catch(() => []))
+    );
+    if (token !== searchToken) return;
+
+    for (let j = 0; j < batch.length; j++) {
+      for (const m of fetched[j]) {
+        if (!m.text || !String(m.text).toLowerCase().includes(q.toLowerCase())) continue;
+        hits++;
+        results.insertBefore(messageHitRow(batch[j], m, q), status);
+      }
+    }
+  }
+
+  if (token !== searchToken) return;
+
+  const parts = [];
+  parts.push(hits === 0
+    ? 'No messages matched.'
+    : hits + (hits === 1 ? ' message' : ' messages') + ' matched.');
+  if (conversationItems.length > scanned.length) {
+    parts.push('Searched the ' + scanned.length + ' most recent conversations.');
+  }
+  status.textContent = parts.join(' ');
+}
+
+document.getElementById('searchInput').addEventListener('input', onSearchInput);
+document.getElementById('searchInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') clearSearch();
+});
 
 /* ── Thread menu ── */
 
@@ -476,6 +738,8 @@ function renderMessages(customer, items, box) {
   for (const m of items) {
     const isInbound = Number(m.bInbound) === 1;
     const wrapper = document.createElement('div');
+    // Not `mid`: the per-message Delete button already carries that.
+    wrapper.dataset.messageId = m.iMessageId;
     wrapper.className = 'flex flex-col max-w-[75%] md:max-w-[65%] msg-anim'
       + (isInbound ? ' items-start self-start' : ' items-end self-end');
 
@@ -894,6 +1158,11 @@ document.getElementById('compose').addEventListener('submit', async (e) => {
     }
     txt.value = '';
     txt.style.height = 'auto';
+    // The number field is hidden the moment the draft becomes a real thread,
+    // but its value survives — and the next "New conversation" would then open
+    // pre-filled with whoever was messaged last (#4). The open thread is
+    // unaffected: replying again goes through currentCustomer, not this field.
+    document.getElementById('customerInput').value = '';
     clearAttachments();
     localStorage.removeItem('draft-' + to);
     await openConversation(to, true);

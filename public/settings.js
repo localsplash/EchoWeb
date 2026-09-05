@@ -23,6 +23,19 @@ const CARRIER_FIELDS = {
     { key: 'authToken',           label: 'Auth Token',           password: true },
     { key: 'messagingServiceSid', label: 'Messaging Service SID' },
   ],
+  // Tychron authenticates with a single bearer token — no account id, secret or
+  // application id, and no per-request callback URL (inbound and DLR endpoints
+  // live on the number's Switch in the Atlas portal).
+  //
+  // Complete URLs rather than a base plus a path, deliberately: Tychron's own
+  // documentation is inconsistent about the MMS path (/api/v1/mms in the
+  // endpoint section, /mms in the request example), so a wrong value should be
+  // a settings edit rather than a redeploy.
+  8: [ // Tychron
+    { key: 'apiToken', label: 'API Token', password: true },
+    { key: 'smsUrl',   label: 'SMS URL', placeholder: 'https://sms.tychron.online/sms' },
+    { key: 'mmsUrl',   label: 'MMS URL', placeholder: 'https://mms.tychron.online/api/v1/mms' },
+  ],
 };
 
 let carriers    = [];
@@ -321,7 +334,7 @@ function renderSettingsFields(eCarrierId, existing) {
       input.dataset.settingKey = def.key;
       input.value = existing[def.key] || '';
       input.className = 'w-full px-3 py-2 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm transition-all bg-white';
-      input.placeholder = def.label;
+      input.placeholder = def.placeholder || def.label;
 
       wrap.appendChild(label);
       wrap.appendChild(input);
