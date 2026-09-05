@@ -191,10 +191,10 @@ export function buildApp() {
    * Keep the settings snapshot fresh before anything reads it.
    *
    * The store caches for 30 seconds, so this is a comparison on the hot path
-   * and a NocoDB read at most twice a minute — and a change made in NocoDB
-   * reaches this app within that window, with no restart. A failure is not
-   * swallowed: it travels to the handler below, which answers 503 saying
-   * which of unreachable / missing / ambiguous it was.
+   * and a settings read at most twice a minute — and a changed row reaches
+   * this app within that window, with no restart. A failure is not swallowed:
+   * it travels to the handler below, which answers 503 saying which of
+   * unreachable / missing / ambiguous it was.
    */
   app.use((_req, _res, next) => {
     ensureFreshConfig(db).then(() => next(), next);
@@ -204,7 +204,7 @@ export function buildApp() {
 
   // Browser config (media URL, UISP plugin URL, which logins are available).
   // Rebuilt per request from the current settings rather than frozen at
-  // boot, so flipping a value in NocoDB reaches the browser too.
+  // boot, so a changed settings row reaches the browser too.
   app.get('/config.js', (_req, res) => {
     const current = loadConfig();
     res.set('Content-Type', 'application/javascript');

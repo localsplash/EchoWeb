@@ -1,22 +1,11 @@
 import mysql from 'mysql2/promise';
 
 /**
- * Where EchoWeb's configuration comes from.
- *
- * One source: **`echo_tbl_Settings` in the Echo database**. It holds
- * everything about this application — the OAuth and UISP credentials, the
- * public URLs, where EchoService lives. Settings sit next to the data they
- * describe, in the database EchoDatabase owns. Rows are keyed by `sApp`:
- * `'*'` is read by every Echo app, `'web'` by this one, and this one's own
- * row wins over the general one.
- *
- * There used to be a second source — `trustedCIDR`, read from the IdentityBase
- * NocoDB base. This app never used the value: it fetched it, put it on the
- * config object, and nothing read it back. What it did do was make NocoDB
- * credentials a hard requirement for starting at all, which is why a host
- * without them could not run EchoWeb. EchoService still reads that row, since
- * it genuinely enforces the network policy; this app does not, so it no longer
- * asks. See #17.
+ * Where EchoWeb's configuration comes from: **`echo_tbl_Settings` in the Echo
+ * database**. It holds the OAuth and UISP credentials, the public URLs, and
+ * where EchoService lives — settings sit next to the data they describe, in
+ * the database EchoDatabase owns. Rows are keyed by `sApp`: `'*'` is read by
+ * every Echo app, `'web'` by this one, and this one's row wins.
  *
  * Values are cached for 30 seconds, so a change reaches a running app without
  * a restart; the cache is dropped on failure, so the next attempt re-reads
@@ -81,21 +70,16 @@ export async function readEchoSettings(
  * from `echo_tbl_Settings`.
  *
  * `PARENT_DOMAIN` is the domain every application on the platform hangs off.
- * It is not an Echo setting — identity owns it, and its own hostname is
- * derived from it — so restating it here would be a second place for the two
- * to disagree. Every public URL this app has follows from it (see config.ts),
- * which is what makes moving the platform to a new domain one edit instead of
- * a hunt through rows.
+ * Identity owns it and derives its own hostname from it, so restating it here
+ * would be a second place for the two to disagree; every public URL this app
+ * has follows from it (see config.ts).
  *
  * `IDENTITY_CLIENT_SECRET` is how this app authenticates to identity's
  * server-to-server token endpoint. It is identity's secret, held where
  * identity holds it.
  *
- * This is the NocoDB read that #17 removed — deliberately, because the value
- * it fetched then (`trustedCIDR`) had no consumers. These two do. The
- * credentials come from the same shared bootstrap file EchoService uses, so it
- * costs a deployment nothing: identity's `/setup` is still the only place
- * anyone types them.
+ * The credentials come from the same shared bootstrap file EchoService uses,
+ * so identity's `/setup` stays the only place anyone types them.
  */
 export const IDENTITY_BASE_NAME = 'IdentityBase';
 export const IDENTITY_TABLE_NAME = 'auth_tbl_Settings';

@@ -4,31 +4,31 @@ Frontend web app for Echo messaging.
 
 ## Architecture
 - **EchoWeb** = login/session + browser UI
-- **EchoService** = mid-tier API, Bandwidth integration, webhooks, and database access
-- **Production EchoService URL** = `https://io.echo.wisp.net`
+- **EchoService** = mid-tier API, Bandwidth integration, webhooks, and message data
 
-EchoWeb should not connect directly to MySQL.
-All data I/O flows through `ECHO_SERVICE_BASE_URL`.
+Message and media I/O is proxied to `ECHO_SERVICE_BASE_URL`. EchoWeb talks to
+MySQL only for its own concerns — sessions, users, orgs, and the settings table
+below.
 
 ## Local Run
 ```bash
-cp .env.example .env
+cp .env.example .env      # then export it, or run via docker compose
 npm install
 npm run dev
 ```
 
+There is no dotenv here: `npm run dev` reads the process environment, and
+`.env` is what Docker Compose substitutes into `docker-compose.yml`.
+
 ## Required Environment
-- `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_NAME`
 
-Those, and nothing else — see **Configuration** below. In particular there is
-no NocoDB token to obtain: this app reads nothing from NocoDB.
+| Variable | Why it is here |
+| --- | --- |
+| `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` | Where `echo_tbl_Settings` lives — a database cannot carry its own address |
+| `NOCODB_BASE_URL` / `NOCODB_API_TOKEN` | Where `PARENT_DOMAIN` and `IDENTITY_CLIENT_SECRET` live — the platform's, not this app's. On a single-host install identity's `/data/config.json` supplies both and neither needs stating |
 
-## Dev Model
-For local development on Windows/macOS/Linux, run EchoWeb locally and point it at the shared mid-tier:
-
-- `ECHO_SERVICE_BASE_URL=https://io.echo.wisp.net`
-
-That lets a remote developer run the UI without needing MySQL or the Bandwidth webhook stack locally.
+That is the entire list. `PORT` (3160), `NODE_ENV` and `LOG_LEVEL` have
+defaults; everything else is a settings row.
 
 ## Configuration
 
@@ -38,22 +38,17 @@ EchoWeb reads its settings from the **Echo database**, table
 table is defined in EchoDatabase, `init/009_settings.sql`; adding a
 web-specific setting is a row with `sApp='web'`, never a new table.
 
-The `.env` carries only what cannot describe itself:
+`PARENT_DOMAIN` and `IDENTITY_CLIENT_SECRET` come from the NocoDB base
+`IdentityBase` instead, because the platform decides them once for everybody.
+Every public URL follows from `PARENT_DOMAIN`, so moving the platform to a new
+domain is one edit rather than a hunt through rows:
 
-| Variable | Why it is here |
-| --- | --- |
-| `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` | Where `echo_tbl_Settings` lives — a database cannot carry its own address |
-
-That is the entire list, which is the point: give this app a database and it
-runs. It needs no NocoDB credentials and no first-run wizard.
-
-It used to need them, for one value — `trustedCIDR`, the platform-wide network
-policy held in the NocoDB base `IdentityBase`. EchoWeb fetched it, hung it on
-the config object, and never read it back, while making a NocoDB token a hard
-requirement for starting at all. So the fetch is gone (#17). EchoService still
-reads that row, because it genuinely enforces the policy — deciding which
-callers may skip webhook basic auth. EchoWeb enforces nothing of the kind, so
-it no longer asks.
+| Setting | Derived as | Pinned by a row when it differs |
+| --- | --- | --- |
+| `APP_BASE_URL` | `https://echo.<parent>` | yes |
+| `MEDIA_BASE_URL` | `https://media-echo.<parent>` | yes |
+| `IDENTITY_BASE_URL` | `https://identity.<parent>` | yes |
+| `ECHO_SERVICE_BASE_URL` | not derived — internal, container-to-container | required |
 
 Settings are cached for 30 seconds, so a change reaches a running app without
 a restart, and the cache is dropped on failure so the next attempt re-reads
@@ -61,5 +56,6 @@ rather than trusting something unconfirmed. There is no fallback to defaults:
 one retry at startup then exit, `503` at runtime, and `/healthz` answers
 throughout because it needs no settings.
 
-Any settings key may be pinned in the environment as an override (blank counts
-as unset) — see `.env.example`.
+Any settings key may also be pinned in the environment, where it **overrides**
+the row (blank counts as unset) — see `.env.example` for the full list. A stale
+override wins over a correct row, so pin only what you mean to override.
