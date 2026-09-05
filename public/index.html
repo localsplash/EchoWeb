@@ -20,10 +20,13 @@
   </script>
   <style>
     #conversations::-webkit-scrollbar,
+    #searchResults::-webkit-scrollbar,
     #messages::-webkit-scrollbar { width: 4px; }
     #conversations::-webkit-scrollbar-track,
+    #searchResults::-webkit-scrollbar-track,
     #messages::-webkit-scrollbar-track { background: transparent; }
     #conversations::-webkit-scrollbar-thumb,
+    #searchResults::-webkit-scrollbar-thumb,
     #messages::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
     @keyframes msgIn {
       from { opacity: 0; transform: translateY(6px); }
@@ -75,8 +78,30 @@
         </div>
       </div>
 
+      <!-- Search (#5) -->
+      <div class="px-3 py-2.5 border-b border-slate-100">
+        <div class="relative">
+          <svg class="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z"/>
+          </svg>
+          <!-- type="text", not "search": the native clear affordance varies by browser and does not fire the same events. The button below is ours. -->
+          <input id="searchInput" type="text" autocomplete="off" enterkeyhint="search" aria-label="Search messages and numbers"
+            placeholder="Search messages or numbers"
+            class="w-full pl-9 pr-9 py-2 rounded-xl bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm transition-all" />
+          <button id="searchClear" type="button" onclick="clearSearch()" title="Clear search"
+            class="hidden absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
       <!-- Conversation List -->
       <div id="conversations" class="flex-1 overflow-y-auto divide-y divide-slate-100"></div>
+
+      <!-- Search Results (replaces the list while a query is active) -->
+      <div id="searchResults" class="hidden flex-1 overflow-y-auto"></div>
 
     </aside>
 
