@@ -11,36 +11,26 @@ import {
 /**
  * Configuration comes from the Echo database, not from `.env`.
  *
- * The environment states the one thing that cannot describe itself: the Echo
- * database, because you cannot read a database's address out of that
- * database. Everything else is a row in `echo_tbl_Settings` — see EchoDatabase
+ * The environment states the one thing that cannot describe itself: how to
+ * reach the Echo database, plus the NocoDB credentials for IdentityBase.
+ * Everything else is a row in `echo_tbl_Settings` — see EchoDatabase
  * `init/009_settings.sql`.
  *
- * Two values come from IdentityBase instead, because the platform decides
- * them once for everybody: PARENT_DOMAIN and IDENTITY_CLIENT_SECRET. See
- * settings.ts.
- *
- * Every public URL follows from PARENT_DOMAIN. Echo's apps are named
- * `<app>-echo.<parent>`, and the web app — the one people type — is plain
- * `echo.<parent>`:
+ * PARENT_DOMAIN and IDENTITY_CLIENT_SECRET come from IdentityBase instead,
+ * because the platform decides them once for everybody (see settings.ts), and
+ * every public URL follows from PARENT_DOMAIN:
  *
  *     APP_BASE_URL       https://echo.<parent>
  *     MEDIA_BASE_URL     https://media-echo.<parent>
  *     IDENTITY_BASE_URL  https://identity.<parent>
  *
- * so moving the platform to a new domain is one edit rather than a hunt
- * through rows. A row in echo_tbl_Settings still overrides any of them, for
- * the deployment that genuinely differs; blank means "derive it".
+ * A row still overrides any of them for the deployment that genuinely
+ * differs; blank means "derive it". Nothing carries a default: a value that
+ * looks configured and is wrong is worse than one plainly missing.
  *
- * Nothing below carries a default. An invented `https://io.echo.wisp.net` or
- * `echo-database` is a value that looks configured and is wrong, which is
- * worse than one that is plainly missing.
- *
- * `loadConfig()` stays synchronous and keeps the shape every caller already
- * expects. What changed is where the object comes from: a snapshot refreshed
- * at most every 30 seconds by the middleware in app.ts, so a settings change
- * reaches this app without a restart. Reading before the first successful
- * refresh throws rather than guessing.
+ * `loadConfig()` is synchronous and reads a snapshot refreshed at most every
+ * 30 seconds by the middleware in app.ts, so a settings change reaches this
+ * app without a restart. Reading before the first successful refresh throws.
  */
 
 const envSchema = z.object({
@@ -59,7 +49,7 @@ const envSchema = z.object({
 
   // Where to read PARENT_DOMAIN and IDENTITY_CLIENT_SECRET from. On a
   // single-host install these arrive in identity's own bootstrap file,
-  // mounted read-only at /data — nothing to stated here.
+  // mounted read-only at /data — see localConfig.ts.
   NOCODB_BASE_URL: z.string().default(''),
   NOCODB_API_TOKEN: z.string().default(''),
 });
@@ -75,6 +65,7 @@ export const SETTING_KEYS = [
   'ECHO_SERVICE_BASE_URL',
   'MEDIA_BASE_URL',
   'APP_BASE_URL',
+  'IDENTITY_BASE_URL',
   'GOOGLE_CLIENT_ID',
   'GOOGLE_CLIENT_SECRET',
   'MICROSOFT_CLIENT_ID',
@@ -84,10 +75,9 @@ export const SETTING_KEYS = [
   'UISP_CRM_APP_KEY_READ',
   'UISP_SSO_SECRET',
   'UISP_PLUGIN_URL',
-  // Real-time updates (#16). Only the two public halves — the app id and the
-  // secret belong to EchoService, which is what publishes and what signs
-  // channel authorizations. Both blank is a supported deployment: the browser
-  // falls back to the 30-second poll (#15).
+  // Only the two public halves — the app id and the secret belong to
+  // EchoService, which publishes and signs channel authorizations. Both blank
+  // is supported: the browser falls back to the 30-second poll.
   'PUSHER_KEY',
   'PUSHER_CLUSTER',
 ] as const;
@@ -149,6 +139,7 @@ function assemble(env: EnvConfig, settings: Settings, identity: Settings): AppCo
     ECHO_SERVICE_BASE_URL: value('ECHO_SERVICE_BASE_URL'),
     MEDIA_BASE_URL: derived('MEDIA_BASE_URL', 'media-echo'),
     APP_BASE_URL: derived('APP_BASE_URL', 'echo'),
+    IDENTITY_BASE_URL: derived('IDENTITY_BASE_URL', 'identity'),
     GOOGLE_CLIENT_ID: value('GOOGLE_CLIENT_ID'),
     GOOGLE_CLIENT_SECRET: value('GOOGLE_CLIENT_SECRET'),
     MICROSOFT_CLIENT_ID: value('MICROSOFT_CLIENT_ID'),
@@ -162,7 +153,6 @@ function assemble(env: EnvConfig, settings: Settings, identity: Settings): AppCo
     PUSHER_CLUSTER: value('PUSHER_CLUSTER'),
     PARENT_DOMAIN: parent,
     IDENTITY_CLIENT_SECRET: identity.IDENTITY_CLIENT_SECRET ?? '',
-    IDENTITY_BASE_URL: value('IDENTITY_BASE_URL') || hostUnder(parent, 'identity'),
   };
 }
 

@@ -5,7 +5,8 @@
   "main": "dist/server.js",
   "scripts": {
     "test": "vitest run",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/server.js",
     "dev": "tsx watch src/server.ts",
     "lint": "eslint .",
@@ -16,8 +17,6 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "axios": "^1.13.6",
-    "drizzle-orm": "^0.44.7",
     "express": "^5.2.1",
     "mysql2": "^3.15.3",
     "pino": "^10.3.1",

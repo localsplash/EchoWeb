@@ -2,21 +2,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 /**
- * The bootstrap file — how this app finds the settings base it cannot read an
- * address out of.
+ * The bootstrap file — how this app finds the settings base whose address it
+ * cannot read out of that base.
  *
- * Deliberately the same two keys, the same path and the same precedence as
- * identity's `src/localConfig.ts` and EchoService's `src/localConfig.js`.
- * Three apps that bootstrap identically can share one file, which is what
- * makes a single-host install zero-config: identity's `/setup` writes it, and
- * this app finds it already mounted read-only at `/data`.
+ * Deliberately the same two keys, path and precedence as identity's
+ * `src/localConfig.ts` and EchoService's `src/localConfig.js`, so three apps
+ * that bootstrap identically can share one file: identity's `/setup` writes
+ * it, and this app finds it already mounted read-only at `/data`.
  *
- * Environment first, so a deployment that states these as variables keeps
- * doing so and never grows a file it did not ask for. Blank counts as unset.
- *
- * There is no wizard here. Unlike EchoService, EchoWeb has nothing to ask
- * that identity has not already been asked — and on a host where the volume
- * cannot be shared, stating two environment variables is the whole job.
+ * Environment first, so a deployment that states these as variables never
+ * grows a file it did not ask for. Blank counts as unset.
  */
 export const LOCAL_CONFIG_PATH =
   process.env.ECHO_CONFIG_PATH || path.join(process.env.ECHO_CONFIG_DIR || '/data', 'config.json');
@@ -25,10 +20,8 @@ const KEYS = ['NOCODB_BASE_URL', 'NOCODB_API_TOKEN'] as const;
 
 /**
  * Fold the bootstrap file into the environment. A missing file is the
- * ordinary case — the environment may already carry these, or this may be a
- * deployment that does not need them yet — so it is not an error. A corrupt
- * one is an operator's problem and says so rather than looking like an app
- * that forgot its configuration.
+ * ordinary case — the environment may already carry these — so it is not an
+ * error. A corrupt one is an operator's problem and says so.
  */
 export function applyLocalConfig(
   env: NodeJS.ProcessEnv = process.env,

@@ -27,6 +27,6 @@ module.exports = {
   }),
   ssoSecret: () => required('UISP_SSO_SECRET'),
   crmKey: () => required('UISP_CRM_APP_KEY_READ'),
-  crmBase: () => (process.env.UISP_BASE_URL || 'https://my.wisp.net') + '/crm/api/v1.0',
+  crmBase: () => required('UISP_BASE_URL') + '/crm/api/v1.0',
   mysql: require('../../node_modules/mysql2/promise'),
 };
