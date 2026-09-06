@@ -56,8 +56,7 @@
     </a>
 
     <p class="mt-6 text-xs text-slate-400 text-center">
-      Google, Microsoft and your Wisp.net ISP account all work — you'll choose
-      on the next screen.
+      Use your office account to sign in through the shared platform.
     </p>
 
   </div>
@@ -67,22 +66,12 @@
     // Show error banners from query params
     const params = new URLSearchParams(location.search);
     const errorMap = {
-      google_denied:            'Google sign-in was cancelled.',
-      microsoft_denied:         'Microsoft sign-in was cancelled.',
-      microsoft_not_configured: 'Microsoft sign-in is not yet configured. Please contact support.',
-      missing_code:             'The sign-in provider did not return an auth code.',
-      invalid_state:            'Login session expired. Please try again.',
-      csrf_mismatch:            'Security check failed. Please try again.',
-      link_expired:             'Your session expired before the account could be linked. Please try again.',
-      token_exchange_failed:    'Could not complete sign-in. Please try again.',
-      userinfo_failed:          'Could not read your account info from the sign-in provider.',
-      no_account:               'No Echo account found for that address. Please sign in via your Wisp.net UISP account first.',
-      no_membership:            'Your account isn\'t connected to any organisation yet.',
-      uisp_fetch_failed:        'Could not reach your Wisp.net UISP account. Please try again.',
-      sso_replay:               'This sign-in link has already been used. Please try again.',
-      sso_not_configured:       'UISP sign-in is not yet configured. Please contact support.',
-      invalid_sso_code:         'The UISP sign-in link is invalid or expired. Please try again.',
-      missing_sso_params:       'Incomplete sign-in link from your Wisp.net UISP portal.',
+      state:'Your sign-in request expired. Please try again.',
+      missing_code:'The sign-in provider did not return a code.',
+      token_exchange_failed:'Could not complete sign-in. Please try again.',
+      identity_not_configured:'Sign-in has not been configured. Contact your administrator.',
+      identity_upgrade_required:'Sign-in is being updated. Contact your administrator.',
+      invalid_session:'Your sign-in session is unavailable. Please try again.',
     };
     const err = params.get('auth_error');
     if (err && errorMap[err]) {

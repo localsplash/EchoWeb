@@ -1,103 +1,84 @@
-import { describe, it, expect } from 'vitest';
-import { buildMicrosoftAuthUrl, parseMicrosoftIdToken } from './auth';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import express from 'express';
+import request from 'supertest';
+import {
+  setSessionCookie,
+  clearOAuthStateCookie,
+  getSessionIdFromRequest,
+  redeemIdentityCode,
+} from './auth';
 import type { AppConfig } from './config';
-import type { OAuthState } from './auth';
-
-/** Build an unsigned JWT with the given claims — only the payload is read. */
-function idToken(claims: Record<string, unknown>): string {
-  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
-  return `${b64({ alg: 'RS256', typ: 'JWT' })}.${b64(claims)}.signature`;
-}
-
-const config = {
-  MICROSOFT_CLIENT_ID: 'client-abc',
-  MICROSOFT_TENANT: 'common',
-  APP_BASE_URL: 'https://echo.example.com',
-} as AppConfig;
-
-describe('parseMicrosoftIdToken', () => {
-  it('reads a work/school account', () => {
-    const info = parseMicrosoftIdToken(
-      idToken({
-        sub: 'sub-123',
-        oid: 'oid-456',
-        tid: 'tenant-789',
-        name: 'Ada Lovelace',
-        email: 'ada@contoso.com',
-        preferred_username: 'ada@contoso.com',
-      })
-    );
-    expect(info).toEqual({
-      sub: 'sub-123',
-      email: 'ada@contoso.com',
-      name: 'Ada Lovelace',
+const token = 'a'.repeat(64);
+afterEach(() => vi.unstubAllGlobals());
+describe('central handoff and cookies', () => {
+  it('sets a host-bound opaque cookie and clears OAuth state without overwriting headers', async () => {
+    const app = express();
+    app.get('/', (_req, res) => {
+      clearOAuthStateCookie(res);
+      setSessionCookie(res, token);
+      res.end();
     });
+    const res = await request(app).get('/');
+    const cookies = res.headers['set-cookie'] as unknown as string[];
+    expect(cookies).toHaveLength(3);
+    expect(cookies[0]).toContain('echo_oauth_state=;');
+    expect(cookies[1]).toContain(`__Host-echo_platform_session=${token}`);
+    expect(cookies[1]).toContain('HttpOnly; SameSite=Lax; Secure');
+    expect(cookies[1]).not.toContain('Domain=');
+    expect(cookies[2]).toContain('echo_session=;');
   });
-
-  it('falls back to preferred_username when the tenant publishes no email claim', () => {
-    const info = parseMicrosoftIdToken(
-      idToken({ sub: 's', tid: 't', name: 'Bob', preferred_username: 'bob@contoso.com' })
-    );
-    expect(info?.email).toBe('bob@contoso.com');
+  it('does not adopt a legacy local session cookie', () => {
+    expect(
+      getSessionIdFromRequest({
+        headers: { cookie: `echo_session=${token}` },
+      } as express.Request),
+    ).toBeNull();
+    expect(
+      getSessionIdFromRequest({
+        headers: { cookie: '__Host-echo_platform_session=%ZZ' },
+      } as express.Request),
+    ).toBeNull();
   });
-
-  it('lowercases the address so CRM lookups match regardless of casing', () => {
-    const info = parseMicrosoftIdToken(idToken({ sub: 's', email: 'Ada@Contoso.COM' }));
-    expect(info?.email).toBe('ada@contoso.com');
-  });
-
-  it('names the user by address when the token carries no display name', () => {
-    const info = parseMicrosoftIdToken(idToken({ sub: 's', email: 'ada@contoso.com' }));
-    expect(info?.name).toBe('ada@contoso.com');
-  });
-
-  // Without an address the CRM lookup would be meaningless, so the sign-in has
-  // to fail rather than fall through to a blank-email provisioning attempt.
-  it('rejects a token with no usable address', () => {
-    expect(parseMicrosoftIdToken(idToken({ sub: 's', tid: 't', name: 'No Mail' }))).toBeNull();
-  });
-
-  it('rejects a preferred_username that is not an address', () => {
-    expect(parseMicrosoftIdToken(idToken({ sub: 's', preferred_username: 'DOMAIN\\user' }))).toBeNull();
-  });
-
-  it('rejects a token with no subject', () => {
-    expect(parseMicrosoftIdToken(idToken({ email: 'ada@contoso.com' }))).toBeNull();
-  });
-
-  it('rejects a malformed token instead of throwing', () => {
-    expect(parseMicrosoftIdToken('not-a-jwt')).toBeNull();
-    expect(parseMicrosoftIdToken('a.!!!not-base64!!!.c')).toBeNull();
-  });
-});
-
-describe('buildMicrosoftAuthUrl', () => {
-  const state: OAuthState = { csrf: 'csrf-token', context: 'login', provider: 'microsoft' };
-
-  it('targets the configured authority and our own callback', () => {
-    const url = new URL(buildMicrosoftAuthUrl(config, state));
-    expect(url.origin + url.pathname).toBe(
-      'https://login.microsoftonline.com/common/oauth2/v2.0/authorize'
-    );
-    expect(url.searchParams.get('client_id')).toBe('client-abc');
-    expect(url.searchParams.get('redirect_uri')).toBe(
-      'https://echo.example.com/auth/microsoft/callback'
-    );
-    expect(url.searchParams.get('response_type')).toBe('code');
-  });
-
-  it('round-trips the state so the callback can verify CSRF and provider', () => {
-    const url = new URL(buildMicrosoftAuthUrl(config, state));
-    const decoded = JSON.parse(
-      Buffer.from(url.searchParams.get('state')!, 'base64url').toString('utf8')
-    );
-    expect(decoded).toEqual(state);
-  });
-
-  it('honours a tenant-restricted authority', () => {
-    const url = new URL(
-      buildMicrosoftAuthUrl({ ...config, MICROSOFT_TENANT: 'tenant-guid' } as AppConfig, state)
-    );
-    expect(url.pathname).toBe('/tenant-guid/oauth2/v2.0/authorize');
+  it('requires a central token and strict verified privilege in the token response', async () => {
+    const config = {
+      IDENTITY_BASE_URL: 'https://identity.X.TLD',
+      IDENTITY_CLIENT_SECRET: 'server-only',
+    } as AppConfig;
+    const payload = {
+      appSession: { token },
+      user: {
+        iUserId: 7,
+        email: 'x@x.tld',
+        displayName: 'X',
+        superAdmin: false,
+      },
+      identity: { provider: 'google', subject: '7' },
+      identities: [],
+    };
+    const fetch = vi
+      .fn()
+      .mockResolvedValue({ ok: true, json: async () => payload });
+    vi.stubGlobal('fetch', fetch);
+    expect(
+      (
+        await redeemIdentityCode(
+          config,
+          'code',
+          'https://echo.X.TLD/auth/identity/callback',
+        )
+      )?.user.superAdmin,
+    ).toBe(false);
+    expect(fetch.mock.calls[0][1]).toMatchObject({
+      redirect: 'error',
+      headers: { 'X-Id-Client-Secret': 'server-only' },
+    });
+    payload.user.superAdmin = 'false' as unknown as boolean;
+    expect(
+      await redeemIdentityCode(
+        config,
+        'code',
+        'https://echo.X.TLD/auth/identity/callback',
+      ),
+    ).toBeNull();
   });
 });
