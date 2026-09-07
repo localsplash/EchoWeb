@@ -1,74 +1,87 @@
 openapi: 3.0.3
 info:
-  title: EchoWeb API
-  version: 0.1.0
+  title: EchoWeb platform session boundary
+  version: 2.0.0
+  description: >-
+    EchoWeb uses Identity application sessions and current tenant membership.
+    Messaging proxies inject the mapped business number; callers cannot choose
+    ownership through query/body fields. Browser mutations require same-origin
+    Origin. Legacy provider/session management belongs to Identity.
 servers:
   - url: /
+components:
+  securitySchemes:
+    platformSession:
+      type: apiKey
+      in: cookie
+      name: __Host-echo_platform_session
+security:
+  - platformSession: []
 paths:
   /healthz:
     get:
-      summary: Health check
+      security: []
+      summary: Configuration-independent process health
       responses:
-        '200':
-          description: OK
-  /callbacks/inbound/messaging:
+        '200': {description: Process is running}
+  /readyz:
+    get:
+      security: []
+      summary: Configuration and Echo mapping schema readiness
+      responses:
+        '200': {description: Settings and mappings are readable}
+        '503': {description: Dependency unavailable}
+  /auth/identity:
+    get:
+      security: []
+      summary: Begin a state-bound central sign-in
+      responses:
+        '302': {description: Redirect to Identity}
+  /api/me:
+    get:
+      summary: Current canonical user and selected mapped business
+      responses:
+        '200': {description: Central user ID, legacy Echo org ID, canonical tenant ID, verified role and business number}
+        '401': {description: Missing or revoked central session}
+        '503': {description: Identity or configuration unavailable}
+  /api/businesses:
+    get:
+      summary: Current enabled businesses and reviewed messaging numbers
+      responses:
+        '200': {description: 'items array with iOrgId, iTenantId, iBusinessNumber, name, role'}
+        '401': {description: Missing or revoked central session}
+  /select-business:
     post:
-      summary: Receive Bandwidth inbound webhook events
+      summary: Select an authorized business number and persist its central tenant
       requestBody:
         required: true
         content:
-          application/json:
-            schema:
-              type: array
-              items:
-                type: object
-      responses:
-        '200':
-          description: Processed
-  /message/list:
-    get:
-      summary: List stored inbound messages
-      responses:
-        '200':
-          description: Message list
-  /message/open:
-    get:
-      summary: Open one stored message
-      parameters:
-        - in: query
-          name: id
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Message JSON
-        '404':
-          description: Not found
-  /sendMessage:
-    post:
-      summary: Send outbound SMS via Bandwidth
-      requestBody:
-        required: true
-        content:
-          application/json:
+          application/x-www-form-urlencoded:
             schema:
               type: object
-              required: [from, to, text]
+              required: [businessNumber]
               properties:
-                from:
-                  type: string
-                  example: "+17149799911"
-                to:
-                  type: string
-                  example: "+17146120126"
-                text:
-                  type: string
-                  example: "Echo is alive; from Clawdy"
+                businessNumber: {type: string, pattern: '^\d{10}$'}
       responses:
-        '200':
-          description: Sent
-        '400':
-          description: Validation failed
-        '502':
-          description: Provider failed
+        '302': {description: Selected business}
+        '403': {description: Invalid Origin or inaccessible business}
+  /logout:
+    post:
+      summary: Revoke the central application session and clear cookies
+      responses:
+        '302': {description: Signed out}
+        '403': {description: Same-origin request required}
+  /api/conversations:
+    get:
+      summary: List conversations for the currently authorized mapped number
+      responses:
+        '200': {description: EchoService conversation response}
+        '401': {description: Missing or revoked central session}
+        '403': {description: Select an authorized business or repair mapping}
+        '503': {description: Identity unavailable; no local authorization fallback}
+  /api/carrier-applications:
+    get:
+      summary: Carrier configuration (verified SUPER_ADMIN only)
+      responses:
+        '200': {description: EchoService configuration response}
+        '403': {description: Platform administrator required}

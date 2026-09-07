@@ -28,7 +28,7 @@ async function main() {
   for (let attempt = 1; ; attempt++) {
     try {
       await refreshConfig(db);
-      console.log('[settings] echo_tbl_Settings read');
+      console.log(`[settings] ${env.SETTINGS_MODE} configuration read`);
       break;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

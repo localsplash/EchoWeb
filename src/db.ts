@@ -22,6 +22,8 @@ export function getDb(config: EnvConfig): mysql.Pool {
       waitForConnections: true,
       connectionLimit: 5,
       timezone: 'Z',
+      supportBigNumbers:true,
+      bigNumberStrings:false,
     });
   }
   return pool;

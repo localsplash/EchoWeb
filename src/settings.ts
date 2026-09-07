@@ -1,17 +1,7 @@
 import mysql from 'mysql2/promise';
 
-/**
- * Where EchoWeb's configuration comes from: **`echo_tbl_Settings` in the Echo
- * database**. It holds the OAuth and UISP credentials, the public URLs, and
- * where EchoService lives — settings sit next to the data they describe, in
- * the database EchoDatabase owns. Rows are keyed by `sApp`: `'*'` is read by
- * every Echo app, `'web'` by this one, and this one's row wins.
- *
- * Values are cached for 30 seconds, so a change reaches a running app without
- * a restart; the cache is dropped on failure, so the next attempt re-reads
- * rather than trusting something it could not confirm; and there is no
- * fallback, because an app that cannot read its configuration should say so.
- */
+/** PlatformConfig is the normal source. Legacy SQL/IdentityBase readers are
+ * retained only behind an explicit SETTINGS_MODE=legacy cutover switch. */
 
 /** Values are trusted for this long before the source is asked again. */
 export const CACHE_TTL_MS = 30_000;
@@ -24,7 +14,7 @@ export type Settings = Record<string, string>;
 export class SettingsUnavailableError extends Error {
   constructor(
     public reason: 'unconfigured' | 'unreachable',
-    message: string
+    message: string,
   ) {
     super(message);
     this.name = 'SettingsUnavailableError';
@@ -46,13 +36,13 @@ interface SettingRow extends mysql.RowDataPacket {
  */
 export async function readEchoSettings(
   db: mysql.Pool,
-  app: string = APP_NAME
+  app: string = APP_NAME,
 ): Promise<Settings> {
   const [rows] = await db.query<SettingRow[]>(
     `SELECT sApp, sKey, sValue FROM echo_tbl_Settings
       WHERE sApp IN ('*', ?)
       ORDER BY sApp = ?`, // the app's own row sorts last, so it wins
-    [app, app]
+    [app, app],
   );
   const settings: Settings = {};
   for (const row of rows) {
@@ -63,33 +53,20 @@ export async function readEchoSettings(
   return settings;
 }
 
-// ─── IdentityBase, for what the platform decides once ────────────────────────
-
-/**
- * Two values EchoWeb reads from the platform's own settings base rather than
- * from `echo_tbl_Settings`.
- *
- * `PARENT_DOMAIN` is the domain every application on the platform hangs off.
- * Identity owns it and derives its own hostname from it, so restating it here
- * would be a second place for the two to disagree; every public URL this app
- * has follows from it (see config.ts).
- *
- * `IDENTITY_CLIENT_SECRET` is how this app authenticates to identity's
- * server-to-server token endpoint. It is identity's secret, held where
- * identity holds it.
- *
- * The credentials come from the same shared bootstrap file EchoService uses,
- * so identity's `/setup` stays the only place anyone types them.
- */
+// Legacy names are used only by the explicit legacy mode, never as fallback.
 export const IDENTITY_BASE_NAME = 'IdentityBase';
 export const IDENTITY_TABLE_NAME = 'auth_tbl_Settings';
 
 /** The keys read from IdentityBase. Blank counts as unset, as everywhere. */
-export const IDENTITY_KEYS = ['PARENT_DOMAIN', 'IDENTITY_CLIENT_SECRET'] as const;
+export const IDENTITY_KEYS = [
+  'PARENT_DOMAIN',
+  'IDENTITY_CLIENT_SECRET',
+] as const;
 
 interface NocoConfig {
   NOCODB_BASE_URL: string;
   NOCODB_API_TOKEN: string;
+  SETTINGS_MODE?: 'platform' | 'legacy';
 }
 
 export class IdentitySettingsStore {
@@ -100,45 +77,54 @@ export class IdentitySettingsStore {
 
   private async api<T>(path: string): Promise<T> {
     const resp = await fetch(`${this.config.NOCODB_BASE_URL}${path}`, {
-      headers: { 'xc-token': this.config.NOCODB_API_TOKEN, 'Content-Type': 'application/json' },
+      headers: {
+        'xc-token': this.config.NOCODB_API_TOKEN,
+        'Content-Type': 'application/json',
+      },
+      signal: AbortSignal.timeout(5000),
+      redirect: 'error',
     });
     if (!resp.ok) {
-      const text = await resp.text().catch(() => '');
-      throw new Error(`NocoDB GET ${path} failed: ${resp.status} ${text.slice(0, 200)}`);
+      throw new Error(`NocoDB GET ${path} failed: ${resp.status}`);
     }
     return resp.json() as Promise<T>;
   }
 
   private async resolveTable(): Promise<string> {
-    if (this.ids && Date.now() - this.ids.at < CACHE_TTL_MS) return this.ids.tableId;
+    if (this.ids && Date.now() - this.ids.at < CACHE_TTL_MS)
+      return this.ids.tableId;
     if (!this.config.NOCODB_BASE_URL || !this.config.NOCODB_API_TOKEN) {
       throw new SettingsUnavailableError(
         'unconfigured',
         'NOCODB_BASE_URL and NOCODB_API_TOKEN must be set to read PARENT_DOMAIN from ' +
           `${IDENTITY_BASE_NAME}. On a single-host install they come from identity's ` +
-          'config volume, mounted read-only at /data.'
+          'config volume, mounted read-only at /data.',
       );
     }
     // Found by NAME at runtime, never by an ID from a config file: an ID
     // survives a rename and outlives a restore.
-    const bases = await this.api<{ list: Array<{ id: string; title: string }> }>(
-      '/api/v2/meta/bases'
-    );
-    const matches = bases.list.filter((b) => b.title === IDENTITY_BASE_NAME);
+    const bases = await this.api<{
+      list: Array<{ id: string; title: string }>;
+    }>('/api/v2/meta/bases');
+    const legacy = this.config.SETTINGS_MODE === 'legacy';
+    const baseName = legacy ? IDENTITY_BASE_NAME : 'PlatformConfig';
+    const tableName = legacy ? IDENTITY_TABLE_NAME : 'cfg_tbl_Setting';
+    const matches = bases.list.filter((b) => b.title === baseName);
     if (matches.length !== 1) {
       throw new SettingsUnavailableError(
         'unreachable',
-        `Expected exactly one NocoDB base named ${IDENTITY_BASE_NAME}, found ${matches.length}.`
+        `Expected exactly one NocoDB base named ${baseName}, found ${matches.length}.`,
       );
     }
-    const tables = await this.api<{ list: Array<{ id: string; title: string }> }>(
-      `/api/v2/meta/bases/${matches[0].id}/tables`
-    );
-    const table = tables.list.find((t) => t.title === IDENTITY_TABLE_NAME);
-    if (!table) {
+    const tables = await this.api<{
+      list: Array<{ id: string; title: string }>;
+    }>(`/api/v2/meta/bases/${matches[0].id}/tables`);
+    const matchingTables = tables.list.filter((t) => t.title === tableName);
+    const table = matchingTables[0];
+    if (matchingTables.length !== 1) {
       throw new SettingsUnavailableError(
         'unreachable',
-        `The base ${IDENTITY_BASE_NAME} has no table named ${IDENTITY_TABLE_NAME}.`
+        `Expected one ${tableName} table in ${baseName}, found ${matchingTables.length}.`,
       );
     }
     this.ids = { at: Date.now(), tableId: table.id };
@@ -146,28 +132,64 @@ export class IdentitySettingsStore {
   }
 
   async get(): Promise<Settings> {
-    if (this.cache && Date.now() - this.cache.at < CACHE_TTL_MS) return this.cache.values;
+    if (this.cache && Date.now() - this.cache.at < CACHE_TTL_MS)
+      return this.cache.values;
     try {
       const tableId = await this.resolveTable();
-      const page = await this.api<{ list: Array<{ Key: string; Value: string | null }> }>(
-        `/api/v2/tables/${tableId}/records?limit=200`
-      );
+      const rows: Array<{
+        app?: string;
+        settingKey?: string;
+        settingValue?: string | null;
+        Key?: string;
+        Value?: string | null;
+      }> = [];
+      for (let offset = 0; ; offset += 200) {
+        const page = await this.api<{
+          list: typeof rows;
+          pageInfo?: { isLastPage?: boolean };
+        }>(`/api/v2/tables/${tableId}/records?limit=200&offset=${offset}`);
+        rows.push(...page.list);
+        if (page.list.length < 200 || page.pageInfo?.isLastPage === true) break;
+      }
       const values: Settings = {};
-      for (const key of IDENTITY_KEYS) {
-        const row = page.list.find((r) => r.Key === key);
-        const value = row && row.Value != null ? String(row.Value).trim() : '';
-        if (value) values[key] = value;
+      const seen = new Set<string>();
+      for (const row of rows) {
+        const key = JSON.stringify(
+          this.config.SETTINGS_MODE === 'legacy'
+            ? ['legacy', row.Key]
+            : [row.app, row.settingKey],
+        );
+        if (seen.has(key))
+          throw new SettingsUnavailableError(
+            'unreachable',
+            'Duplicate scoped configuration key',
+          );
+        seen.add(key);
+      }
+      if (this.config.SETTINGS_MODE === 'legacy') {
+        for (const key of IDENTITY_KEYS) {
+          const row = rows.find((r) => r.Key === key);
+          const value = row?.Value?.trim();
+          if (value) values[key] = value;
+        }
+      } else {
+        for (const scope of ['*', 'echo', 'echo-web'])
+          for (const row of rows.filter((r) => r.app === scope)) {
+            if (row.settingKey && row.settingValue?.trim())
+              values[row.settingKey] = row.settingValue.trim();
+          }
       }
       this.cache = { at: Date.now(), values };
       return values;
     } catch (err) {
       // Never reuse an ID we could not confirm.
       this.ids = null;
+      this.cache = null;
       if (err instanceof SettingsUnavailableError) throw err;
       throw new SettingsUnavailableError(
         'unreachable',
         `NocoDB at ${this.config.NOCODB_BASE_URL} did not answer or rejected the token: ` +
-          String(err instanceof Error ? err.message : err).slice(0, 200)
+          String(err instanceof Error ? err.message : err).slice(0, 200),
       );
     }
   }

@@ -8,35 +8,15 @@ import {
   readEchoSettings,
 } from './settings';
 
-/**
- * Configuration comes from the Echo database, not from `.env`.
- *
- * The environment states the one thing that cannot describe itself: how to
- * reach the Echo database, plus the NocoDB credentials for IdentityBase.
- * Everything else is a row in `echo_tbl_Settings` — see EchoDatabase
- * `init/009_settings.sql`.
- *
- * PARENT_DOMAIN and IDENTITY_CLIENT_SECRET come from IdentityBase instead,
- * because the platform decides them once for everybody (see settings.ts), and
- * every public URL follows from PARENT_DOMAIN:
- *
- *     APP_BASE_URL       https://echo.<parent>
- *     MEDIA_BASE_URL     https://media-echo.<parent>
- *     IDENTITY_BASE_URL  https://identity.<parent>
- *
- * A row still overrides any of them for the deployment that genuinely
- * differs; blank means "derive it". Nothing carries a default: a value that
- * looks configured and is wrong is worse than one plainly missing.
- *
- * `loadConfig()` is synchronous and reads a snapshot refreshed at most every
- * 30 seconds by the middleware in app.ts, so a settings change reaches this
- * app without a restart. Reading before the first successful refresh throws.
- */
-
+/** Runtime config: PlatformConfig scopes echo-web -> echo -> *, overridden
+ * by nonblank environment settings. SETTINGS_MODE=legacy explicitly selects the
+ * old Echo SQL and IdentityBase readers during rollout. DB coordinates remain
+ * process bootstrap in this bounded release; pools require restart to change. */
 const envSchema = z.object({
   NODE_ENV: z.string().default('development'),
-  PORT: z.coerce.number().default(3000),
+  PORT: z.coerce.number().default(3160),
   LOG_LEVEL: z.string().default('info'),
+  SETTINGS_MODE: z.enum(['platform', 'legacy']).default('platform'),
 
   // The Echo database. Its coordinates are the one thing that has to be
   // stated outside it — everything else about this app lives in
@@ -62,18 +42,14 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): EnvConfig {
 
 /** The keys this app reads out of `echo_tbl_Settings`. */
 export const SETTING_KEYS = [
+  'PARENT_DOMAIN',
+  'IDENTITY_BASE_URL',
+  'IDENTITY_PUBLIC_BASE_URL',
+  'IDENTITY_CLIENT_SECRET',
   'ECHO_SERVICE_BASE_URL',
   'MEDIA_BASE_URL',
+  'MEDIA_INTERNAL_BASE_URL',
   'APP_BASE_URL',
-  'IDENTITY_BASE_URL',
-  'GOOGLE_CLIENT_ID',
-  'GOOGLE_CLIENT_SECRET',
-  'MICROSOFT_CLIENT_ID',
-  'MICROSOFT_CLIENT_SECRET',
-  'MICROSOFT_TENANT',
-  'UISP_BASE_URL',
-  'UISP_CRM_APP_KEY_READ',
-  'UISP_SSO_SECRET',
   'UISP_PLUGIN_URL',
   // Only the two public halves — the app id and the secret belong to
   // EchoService, which publishes and signs channel authorizations. Both blank
@@ -85,15 +61,9 @@ export const SETTING_KEYS = [
 export interface AppConfig extends EnvConfig {
   ECHO_SERVICE_BASE_URL: string;
   MEDIA_BASE_URL: string;
+  /** Private EchoMedia origin. When set, browsers use the authenticated proxy. */
+  MEDIA_INTERNAL_BASE_URL?: string;
   APP_BASE_URL: string;
-  GOOGLE_CLIENT_ID: string;
-  GOOGLE_CLIENT_SECRET: string;
-  MICROSOFT_CLIENT_ID: string;
-  MICROSOFT_CLIENT_SECRET: string;
-  MICROSOFT_TENANT: string;
-  UISP_BASE_URL: string;
-  UISP_CRM_APP_KEY_READ: string;
-  UISP_SSO_SECRET: string;
   UISP_PLUGIN_URL: string;
   PUSHER_KEY: string;
   PUSHER_CLUSTER: string;
@@ -102,6 +72,8 @@ export interface AppConfig extends EnvConfig {
   IDENTITY_CLIENT_SECRET: string;
   /** Derived from PARENT_DOMAIN unless a row pins it. */
   IDENTITY_BASE_URL: string;
+  /** Browser sign-in origin; defaults to the server API origin. */
+  IDENTITY_PUBLIC_BASE_URL?: string;
 }
 
 /**
@@ -113,7 +85,8 @@ function overridesFromEnv(env: NodeJS.ProcessEnv = process.env): Settings {
   const overrides: Settings = {};
   for (const key of SETTING_KEYS) {
     const raw = env[key];
-    if (typeof raw === 'string' && raw.trim() !== '') overrides[key] = raw.trim();
+    if (typeof raw === 'string' && raw.trim() !== '')
+      overrides[key] = raw.trim();
   }
   return overrides;
 }
@@ -126,7 +99,11 @@ function hostUnder(parent: string, label: string): string {
   return parent ? `https://${label}.${parent}` : '';
 }
 
-function assemble(env: EnvConfig, settings: Settings, identity: Settings): AppConfig {
+function assemble(
+  env: EnvConfig,
+  settings: Settings,
+  identity: Settings,
+): AppConfig {
   const value = (key: string): string => settings[key] ?? '';
   const parent = identity.PARENT_DOMAIN ?? '';
   // A row wins over the derived value; blank means derive. The naming scheme
@@ -138,21 +115,19 @@ function assemble(env: EnvConfig, settings: Settings, identity: Settings): AppCo
     // Internal, container-to-container: not a public hostname and not derived.
     ECHO_SERVICE_BASE_URL: value('ECHO_SERVICE_BASE_URL'),
     MEDIA_BASE_URL: derived('MEDIA_BASE_URL', 'media-echo'),
+    MEDIA_INTERNAL_BASE_URL: value('MEDIA_INTERNAL_BASE_URL'),
     APP_BASE_URL: derived('APP_BASE_URL', 'echo'),
-    IDENTITY_BASE_URL: derived('IDENTITY_BASE_URL', 'identity'),
-    GOOGLE_CLIENT_ID: value('GOOGLE_CLIENT_ID'),
-    GOOGLE_CLIENT_SECRET: value('GOOGLE_CLIENT_SECRET'),
-    MICROSOFT_CLIENT_ID: value('MICROSOFT_CLIENT_ID'),
-    MICROSOFT_CLIENT_SECRET: value('MICROSOFT_CLIENT_SECRET'),
-    MICROSOFT_TENANT: value('MICROSOFT_TENANT'),
-    UISP_BASE_URL: value('UISP_BASE_URL'),
-    UISP_CRM_APP_KEY_READ: value('UISP_CRM_APP_KEY_READ'),
-    UISP_SSO_SECRET: value('UISP_SSO_SECRET'),
     UISP_PLUGIN_URL: value('UISP_PLUGIN_URL'),
     PUSHER_KEY: value('PUSHER_KEY'),
     PUSHER_CLUSTER: value('PUSHER_CLUSTER'),
     PARENT_DOMAIN: parent,
     IDENTITY_CLIENT_SECRET: identity.IDENTITY_CLIENT_SECRET ?? '',
+    IDENTITY_BASE_URL:
+      value('IDENTITY_BASE_URL') || hostUnder(parent, 'identity'),
+    IDENTITY_PUBLIC_BASE_URL:
+      value('IDENTITY_PUBLIC_BASE_URL') ||
+      value('IDENTITY_BASE_URL') ||
+      hostUnder(parent, 'identity'),
   };
 }
 
@@ -160,18 +135,58 @@ function assemble(env: EnvConfig, settings: Settings, identity: Settings): AppCo
 export async function refreshConfig(db: mysql.Pool): Promise<AppConfig> {
   const env = loadEnv();
   if (!identityStore) identityStore = new IdentitySettingsStore(env);
-  const [settings, identity] = await Promise.all([
-    readEchoSettings(db).then((rows) => ({ ...rows, ...overridesFromEnv() })),
-    identityStore.get(),
-  ]);
-  const config = assemble(env, settings, identity);
+  const identity = await identityStore.get();
+  const settings = {
+    ...(env.SETTINGS_MODE === 'legacy' ? await readEchoSettings(db) : {}),
+    ...identity,
+    ...overridesFromEnv(),
+  };
+  const config = assemble(env, settings, settings);
+  for (const key of [
+    'PARENT_DOMAIN',
+    'ECHO_SERVICE_BASE_URL',
+    'APP_BASE_URL',
+    'IDENTITY_BASE_URL',
+  ] as const) {
+    if (!config[key])
+      throw new SettingsUnavailableError(
+        'unconfigured',
+        `${key} is required`,
+      );
+  }
+  for (const key of [
+    'ECHO_SERVICE_BASE_URL',
+    'APP_BASE_URL',
+    'IDENTITY_BASE_URL',
+    'IDENTITY_PUBLIC_BASE_URL',
+    'MEDIA_INTERNAL_BASE_URL',
+  ] as const) {
+    if (!config[key]) continue;
+    try {
+      const url = new URL(config[key]!);
+      if (
+        !['http:', 'https:'].includes(url.protocol) ||
+        url.username ||
+        url.password
+      )
+        throw new Error('invalid');
+    } catch {
+      throw new SettingsUnavailableError(
+        'unconfigured',
+        `${key} must be an HTTP(S) URL without embedded credentials`,
+      );
+    }
+  }
   snapshot = { at: Date.now(), config };
   return config;
 }
 
 /** Refresh only when the snapshot has aged out; used per request. */
-export async function ensureFreshConfig(db: mysql.Pool): Promise<AppConfig> {
-  if (snapshot && Date.now() - snapshot.at < CACHE_TTL_MS) return snapshot.config;
+export async function ensureFreshConfig(
+  db: mysql.Pool,
+): Promise<AppConfig> {
+  if (snapshot && Date.now() - snapshot.at < CACHE_TTL_MS)
+    return snapshot.config;
   return refreshConfig(db);
 }
 
@@ -184,7 +199,7 @@ export function loadConfig(): AppConfig {
   if (!snapshot) {
     throw new SettingsUnavailableError(
       'unreachable',
-      'Settings have not been read yet — echo_tbl_Settings was unreachable at startup.'
+      'Application settings have not been read yet.',
     );
   }
   return snapshot.config;
