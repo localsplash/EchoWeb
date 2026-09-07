@@ -10,6 +10,17 @@ const tenant = z.object({
   role: z.enum(['TENANT_ADMIN', 'USER', 'SUPER_ADMIN']),
   bEnabled: z.boolean(),
 });
+const numberRecord = z.object({
+  iPhoneNumberId: safeId,
+  iTenantId: safeId,
+  phoneNumber: z.string().regex(/^\+[1-9]\d{7,14}$/),
+  label: z.string(),
+  bVoice: z.boolean(),
+  bMessaging: z.boolean(),
+  bEnabled: z.boolean(),
+  accessPolicy: z.literal('TENANT_MEMBERS'),
+  iVersion: z.number().int().positive(),
+});
 const active = z.object({
   active: z.literal(true),
   user: z.object({
@@ -19,11 +30,12 @@ const active = z.object({
     superAdmin: z.boolean(),
   }),
   tenants: z.array(tenant),
+  numbers: z.array(numberRecord),
   selectedTenantId: safeId.nullable(),
 });
 export type PlatformIdentity = z.infer<typeof active>;
 export interface BusinessBinding {
-  iOrgId: number;
+  iOrgId: number | null;
   iTenantId: number;
   iBusinessNumber: number;
   name: string;
@@ -96,6 +108,7 @@ export async function introspect(
     );
   return parsed.data;
 }
+/** Legacy import verification only; runtime access uses Identity numbers below. */
 export async function availableBusinesses(
   db: mysql.Pool,
   identity: PlatformIdentity,
@@ -141,7 +154,28 @@ export async function resolvePlatformSession(
 ): Promise<PlatformSession | null> {
   const identity = await introspect(config, token);
   if (!identity) return null;
-  const businesses = await availableBusinesses(db, identity);
+  // Central tenant-number assignments are authority. Legacy Echo user/org tables
+  // retain history only; new platform members need no Echo-local user row.
+  const businesses: BusinessBinding[] = identity.numbers
+    .filter((n) => n.bEnabled && n.bMessaging)
+    .map((n) => {
+      const tenant = identity.tenants.find(
+        (t) => t.iTenantId === n.iTenantId && t.bEnabled,
+      );
+      if (
+        !tenant ||
+        n.accessPolicy !== 'TENANT_MEMBERS' ||
+        !/^\+1[2-9]\d{9}$/.test(n.phoneNumber)
+      )
+        throw new TenantBoundaryError('Invalid central number assignment');
+      return {
+        iOrgId: null,
+        iTenantId: n.iTenantId,
+        iBusinessNumber: Number(n.phoneNumber.slice(2)),
+        name: n.label ? `${tenant.name} — ${n.label}` : tenant.name,
+        role: tenant.role,
+      };
+    });
   const selected = businesses.filter(
     (b) => b.iTenantId === identity.selectedTenantId,
   );

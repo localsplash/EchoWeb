@@ -17,6 +17,7 @@ describe.skipIf(!url)('Echo mapping migration and cutover (real MySQL)', () => {
   ];
   const identity = (tenantIds: number[]): PlatformIdentity => ({
     active: true,
+    numbers: [],
     user: { iUserId: 91, email: null, displayName: null, superAdmin: false },
     selectedTenantId: tenantIds[0] ?? null,
     tenants: tenantIds.map((iTenantId) => ({

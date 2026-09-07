@@ -194,7 +194,7 @@ export function buildApp() {
   app.get('/readyz', async (_req, res) => {
     try {
       await db.query(
-        'SELECT iOrgId,iTenantId,iBusinessNumber FROM echo_tbl_PlatformOrgMap LIMIT 0',
+        'SELECT 1',
       );
       res.json({ ok: true });
     } catch {
@@ -233,15 +233,16 @@ export function buildApp() {
   app.get('/', async (req, res) => {
     const session = await resolveSession(req);
     if (!session) {
-      return res.sendFile(path.join(publicDir, 'login.html'));
+      if (req.query.auth_error || req.query.signed_out)
+        return res.sendFile(path.join(publicDir, 'login.html'));
+      return res.redirect('/auth/identity');
     }
     if (session.bIsSuperAdmin && !session.iBusinessNumber) {
       // Super-admin has not yet selected a business phone
       return res.redirect('/choose-business');
     }
     if (!session.iBusinessNumber) {
-      // A real account whose org has no number yet — the messaging UI would be
-      // an empty shell and every API call would 401, so route them to ordering.
+      // Signed-in members without a selected number receive the tenant-number picker.
       return res.redirect('/choose-business');
     }
     return res.sendFile(path.join(publicDir, 'index.html'));
@@ -476,7 +477,7 @@ export function buildApp() {
       await identityRequest(loadConfig(), '/api/sessions/revoke', { token });
     clearSessionCookie(res);
     setBusinessCookie(res, null);
-    res.redirect('/');
+    res.redirect('/?signed_out=1');
   });
 
   // ── Settings page ────────────────────────────────────────────────────────────

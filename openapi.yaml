@@ -41,12 +41,12 @@ paths:
     get:
       summary: Current canonical user and selected mapped business
       responses:
-        '200': {description: Central user ID, legacy Echo org ID, canonical tenant ID, verified role and business number}
+        '200': {description: Central user ID, nullable legacy Echo org ID (metadata only), canonical tenant ID, verified role and business number}
         '401': {description: Missing or revoked central session}
         '503': {description: Identity or configuration unavailable}
   /api/businesses:
     get:
-      summary: Current enabled businesses and reviewed messaging numbers
+      summary: Current enabled businesses and Identity-owned messaging numbers
       responses:
         '200': {description: 'items array with iOrgId, iTenantId, iBusinessNumber, name, role'}
         '401': {description: Missing or revoked central session}
