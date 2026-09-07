@@ -7,6 +7,7 @@ import pino from 'pino';
 import { loadConfig, loadEnv, ensureFreshConfig } from './config';
 import { SettingsUnavailableError } from './settings';
 import { getDb } from './db';
+import { registerMediaRoute } from './media';
 import {
   getSessionIdFromRequest,
   setSessionCookie,
@@ -202,6 +203,7 @@ export function buildApp() {
         .json({ error: 'Echo platform mapping schema is unavailable' });
     }
   });
+  registerMediaRoute(app, db, loadConfig, resolveSession);
   app.use(express.static(publicDir, { index: false }));
 
   // Browser config (media URL, UISP plugin URL, which logins are available).
@@ -213,7 +215,9 @@ export function buildApp() {
     res.set('Cache-Control', 'public, max-age=300');
     res.send(
       `window.ECHO_CONFIG=${JSON.stringify({
-        MEDIA_BASE_URL: current.MEDIA_BASE_URL,
+        MEDIA_BASE_URL: current.MEDIA_INTERNAL_BASE_URL
+          ? '/api/media'
+          : current.MEDIA_BASE_URL,
         UISP_PLUGIN_URL: current.UISP_PLUGIN_URL,
         // The Pusher key and cluster are public by design — the client has to
         // present the key to connect. The app id and secret stay in
@@ -273,7 +277,7 @@ export function buildApp() {
     config: ReturnType<typeof loadConfig>,
     state: string,
   ): string {
-    const url = new URL('/authorize', config.IDENTITY_BASE_URL);
+    const url = new URL('/authorize', config.IDENTITY_PUBLIC_BASE_URL || config.IDENTITY_BASE_URL);
     url.searchParams.set('redirect_uri', identityRedirectUri(config));
     url.searchParams.set('state', state);
     return url.toString();
@@ -381,7 +385,7 @@ export function buildApp() {
     const config = loadConfig();
     if (!config.IDENTITY_BASE_URL)
       return res.redirect('/?auth_error=identity_not_configured');
-    const onward = new URL('/sso/callback', config.IDENTITY_BASE_URL);
+    const onward = new URL('/sso/callback', config.IDENTITY_PUBLIC_BASE_URL || config.IDENTITY_BASE_URL);
     for (const key of ['code', 'sig'] as const) {
       const value = req.query[key];
       if (typeof value === 'string') onward.searchParams.set(key, value);
@@ -416,7 +420,7 @@ export function buildApp() {
       if (!config.IDENTITY_BASE_URL)
         return res.redirect('/?auth_error=identity_not_configured');
       return res.redirect(
-        new URL('/account', config.IDENTITY_BASE_URL).toString(),
+        new URL('/account', config.IDENTITY_PUBLIC_BASE_URL || config.IDENTITY_BASE_URL).toString(),
       );
     },
   );
@@ -430,7 +434,7 @@ export function buildApp() {
         error: 'Manage sign-in methods in Identity',
         manageUrl: new URL(
           '/account',
-          loadConfig().IDENTITY_BASE_URL,
+          loadConfig().IDENTITY_PUBLIC_BASE_URL || loadConfig().IDENTITY_BASE_URL,
         ).toString(),
       }),
   );
@@ -443,7 +447,7 @@ export function buildApp() {
     res.status(410).json({ error: 'Identity owns the account directory' }),
   );
   app.get('/internal/accounts', (_req, res) =>
-    res.redirect(new URL('/admin', loadConfig().IDENTITY_BASE_URL).toString()),
+    res.redirect(new URL('/admin', loadConfig().IDENTITY_PUBLIC_BASE_URL || loadConfig().IDENTITY_BASE_URL).toString()),
   );
   app.get(['/choose-business', '/internal'], async (req, res) => {
     if (!(await resolveSession(req))) return res.redirect('/');
@@ -481,7 +485,7 @@ export function buildApp() {
     const session = await resolveSession(req);
     if (session && !session.bIsSuperAdmin)
       return res.redirect(
-        new URL('/account', loadConfig().IDENTITY_BASE_URL).toString(),
+        new URL('/account', loadConfig().IDENTITY_PUBLIC_BASE_URL || loadConfig().IDENTITY_BASE_URL).toString(),
       );
     if (!session?.iBusinessNumber) return res.redirect('/');
     return res.sendFile(path.join(publicDir, 'settings.html'));

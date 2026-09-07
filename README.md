@@ -37,3 +37,7 @@ docker run --rm --network platform-test \
 ```
 
 It recreates only `echo_platform_test`; never point it at a production server. The suite executes the actual SQL migration twice and the actual dry-run/apply importer, verifies preserved history, separate tenant access, several numbers per tenant, rejected remappings and mapping drift. Live SMS/MMS/carrier and browser proxy acceptance remain deployment checks, not claims made by these isolated tests.
+
+`IDENTITY_BASE_URL` is the server API origin (for example, `http://identity-preview:3200`). Set optional `IDENTITY_PUBLIC_BASE_URL` to the browser-facing HTTPS origin when Docker DNS differs from public DNS; it defaults to `IDENTITY_BASE_URL`. Token exchange, session checks and tenant selection always use the internal API origin.
+
+Set `MEDIA_INTERNAL_BASE_URL` to the private EchoMedia origin (for example, `http://echo-media-preview:8082`) to serve attachments through `/api/media/<stored-path>`. The browser receives only that same-origin route. Each image, thumbnail, draft or range request rechecks the central session and selected business, then verifies exact stored-path ownership in Echo's message/draft tables before streaming. Keep EchoMedia on a private network without a public proxy. Responses are private and uncached; active content downloads as an attachment. If the internal origin is unset, legacy `MEDIA_BASE_URL` behavior remains available during migration.

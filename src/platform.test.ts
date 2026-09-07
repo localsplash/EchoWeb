@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import request from 'supertest';
 import { buildApp } from './app';
-import { setConfigForTesting, type AppConfig } from './config';
+import { setConfigForTesting, loadConfig, type AppConfig } from './config';
 import type { PlatformIdentity } from './platformSession';
 const fake = vi.hoisted(() => ({
   queries: [] as string[],
@@ -137,6 +137,55 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 describe('Echo central authorization boundary', () => {
+  it('uses the public Identity origin only for browser sign-in', async () => {
+    setConfigForTesting({
+      ...loadConfig(),
+      IDENTITY_BASE_URL: 'http://identity-preview:3200',
+      IDENTITY_PUBLIC_BASE_URL: 'https://identity-preview.x.tld',
+    });
+    const app = buildApp();
+    const login = await request(app).get('/auth/identity');
+    expect(new URL(login.headers.location).origin).toBe(
+      'https://identity-preview.x.tld',
+    );
+    expect(
+      (await request(app).get('/api/me').set('Cookie', cookie())).status,
+    ).toBe(200);
+    expect(calls.at(-1)?.url.origin).toBe('http://identity-preview:3200');
+    for (const path of [
+      '/auth/link',
+      '/internal/accounts',
+      '/sso/callback?code=x&sig=y',
+    ]) {
+      const response = await request(app).get(path);
+      expect(new URL(response.headers.location).origin).toBe(
+        'https://identity-preview.x.tld',
+      );
+    }
+    const identities = await request(app).get('/api/identities');
+    expect(new URL(identities.body.manageUrl).origin).toBe(
+      'https://identity-preview.x.tld',
+    );
+    setConfigForTesting({
+      ...loadConfig(),
+      IDENTITY_PUBLIC_BASE_URL: undefined,
+    });
+    const fallback = await request(app).get('/auth/identity');
+    expect(new URL(fallback.headers.location).origin).toBe(
+      'http://identity-preview:3200',
+    );
+  });
+  it('publishes a same-origin media route without exposing its private origin', async () => {
+    setConfigForTesting({
+      ...loadConfig(),
+      MEDIA_INTERNAL_BASE_URL: 'http://echo-media:8082',
+      MEDIA_BASE_URL: 'https://legacy-media.x.tld',
+    });
+    const response = await request(buildApp()).get('/config.js');
+    expect(response.text).toContain('"MEDIA_BASE_URL":"/api/media"');
+    expect(response.text).not.toContain('echo-media');
+    expect(response.text).not.toContain('legacy-media');
+  });
   it('ignores legacy sessions and returns current central user identifiers', async () => {
     const app = buildApp();
     expect(

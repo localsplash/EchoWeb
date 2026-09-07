@@ -44,9 +44,11 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): EnvConfig {
 export const SETTING_KEYS = [
   'PARENT_DOMAIN',
   'IDENTITY_BASE_URL',
+  'IDENTITY_PUBLIC_BASE_URL',
   'IDENTITY_CLIENT_SECRET',
   'ECHO_SERVICE_BASE_URL',
   'MEDIA_BASE_URL',
+  'MEDIA_INTERNAL_BASE_URL',
   'APP_BASE_URL',
   'UISP_PLUGIN_URL',
   // Real-time updates (#16). Only the two public halves — the app id and the
@@ -60,6 +62,8 @@ export const SETTING_KEYS = [
 export interface AppConfig extends EnvConfig {
   ECHO_SERVICE_BASE_URL: string;
   MEDIA_BASE_URL: string;
+  /** Private EchoMedia origin. When set, browsers use the authenticated proxy. */
+  MEDIA_INTERNAL_BASE_URL?: string;
   APP_BASE_URL: string;
   UISP_PLUGIN_URL: string;
   PUSHER_KEY: string;
@@ -69,6 +73,8 @@ export interface AppConfig extends EnvConfig {
   IDENTITY_CLIENT_SECRET: string;
   /** Derived from PARENT_DOMAIN unless a row pins it. */
   IDENTITY_BASE_URL: string;
+  /** Browser sign-in origin; defaults to the server API origin. */
+  IDENTITY_PUBLIC_BASE_URL?: string;
 }
 
 /**
@@ -110,6 +116,7 @@ function assemble(
     // Internal, container-to-container: not a public hostname and not derived.
     ECHO_SERVICE_BASE_URL: value('ECHO_SERVICE_BASE_URL'),
     MEDIA_BASE_URL: derived('MEDIA_BASE_URL', 'media-echo'),
+    MEDIA_INTERNAL_BASE_URL: value('MEDIA_INTERNAL_BASE_URL'),
     APP_BASE_URL: derived('APP_BASE_URL', 'echo'),
     UISP_PLUGIN_URL: value('UISP_PLUGIN_URL'),
     PUSHER_KEY: value('PUSHER_KEY'),
@@ -118,6 +125,10 @@ function assemble(
     IDENTITY_CLIENT_SECRET: identity.IDENTITY_CLIENT_SECRET ?? '',
     IDENTITY_BASE_URL:
       value('IDENTITY_BASE_URL') || hostUnder(parent, 'identity'),
+    IDENTITY_PUBLIC_BASE_URL:
+      value('IDENTITY_PUBLIC_BASE_URL') ||
+      value('IDENTITY_BASE_URL') ||
+      hostUnder(parent, 'identity'),
   };
 }
 
@@ -139,15 +150,21 @@ export async function refreshConfig(db: mysql.Pool): Promise<AppConfig> {
     'IDENTITY_BASE_URL',
   ] as const) {
     if (!config[key])
-      throw new SettingsUnavailableError('unconfigured', `${key} is required`);
+      throw new SettingsUnavailableError(
+        'unconfigured',
+        `${key} is required`,
+      );
   }
   for (const key of [
     'ECHO_SERVICE_BASE_URL',
     'APP_BASE_URL',
     'IDENTITY_BASE_URL',
+    'IDENTITY_PUBLIC_BASE_URL',
+    'MEDIA_INTERNAL_BASE_URL',
   ] as const) {
+    if (!config[key]) continue;
     try {
-      const url = new URL(config[key]);
+      const url = new URL(config[key]!);
       if (
         !['http:', 'https:'].includes(url.protocol) ||
         url.username ||
@@ -166,7 +183,9 @@ export async function refreshConfig(db: mysql.Pool): Promise<AppConfig> {
 }
 
 /** Refresh only when the snapshot has aged out; used per request. */
-export async function ensureFreshConfig(db: mysql.Pool): Promise<AppConfig> {
+export async function ensureFreshConfig(
+  db: mysql.Pool,
+): Promise<AppConfig> {
   if (snapshot && Date.now() - snapshot.at < CACHE_TTL_MS)
     return snapshot.config;
   return refreshConfig(db);
