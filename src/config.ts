@@ -29,7 +29,7 @@ const envSchema = z.object({
 
   // Where to read PARENT_DOMAIN and IDENTITY_CLIENT_SECRET from. On a
   // single-host install these arrive in identity's own bootstrap file,
-  // mounted read-only at /data — nothing to stated here.
+  // mounted read-only at /data — see localConfig.ts.
   NOCODB_BASE_URL: z.string().default(''),
   NOCODB_API_TOKEN: z.string().default(''),
 });
@@ -51,10 +51,9 @@ export const SETTING_KEYS = [
   'MEDIA_INTERNAL_BASE_URL',
   'APP_BASE_URL',
   'UISP_PLUGIN_URL',
-  // Real-time updates (#16). Only the two public halves — the app id and the
-  // secret belong to EchoService, which is what publishes and what signs
-  // channel authorizations. Both blank is a supported deployment: the browser
-  // falls back to the 30-second poll (#15).
+  // Only the two public halves — the app id and the secret belong to
+  // EchoService, which publishes and signs channel authorizations. Both blank
+  // is supported: the browser falls back to the 30-second poll.
   'PUSHER_KEY',
   'PUSHER_CLUSTER',
 ] as const;

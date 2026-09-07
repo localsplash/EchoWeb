@@ -4,7 +4,7 @@ Echo's messaging browser and backend-for-frontend. Identity owns users, business
 
 ## Development and configuration
 
-Use Node 22: `npm ci`, then `npm run dev`. Copy `.env.example` and configure the Echo database and NocoDB bootstrap credentials. Database coordinates remain explicit process settings in this foundation release; moving those into the initial NocoDB bootstrap is a separate deployment change.
+Use Node 22: `npm ci`, then `npm run dev`. EchoWeb does not load `.env` itself; export its values or pass them through Docker Compose. Copy `.env.example` and configure the Echo database and NocoDB bootstrap credentials. Database coordinates remain explicit process settings in this foundation release; moving those into the initial NocoDB bootstrap is a separate deployment change.
 
 By default `SETTINGS_MODE=platform` reads `PlatformConfig/cfg_tbl_Setting` through NocoDB. Resolution is nonblank environment overrides, exact `echo-web`, declared parent `echo`, then global `*`. Blank seeded rows are unset; duplicate bases, tables and scoped keys fail. Runtime reads never create configuration. Settings and resolved IDs refresh every 30 seconds; failures return 503. `/healthz` remains configuration independent. Coordinate changes require restart.
 
