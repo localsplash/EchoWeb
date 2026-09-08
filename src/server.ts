@@ -1,34 +1,19 @@
 import { buildApp } from './app';
 import { loadEnv, refreshConfig } from './config';
 import { getDb } from './db';
-import { applyLocalConfig } from './localConfig';
-
-// Before anything reads NOCODB_*: fold in /data/config.json, without
-// overriding what the environment already states. On a single-host install
-// that file is identity's, mounted read-only.
-applyLocalConfig();
 
 const RETRY_DELAY_MS = 5_000;
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-/**
- * Read the settings or die.
- *
- * Everything this app needs beyond the database's own address — its OAuth
- * credentials, where EchoService lives, the public URLs — is a row in
- * echo_tbl_Settings. There is no fallback: starting without them would mean
- * answering every request with a fault we could not explain. One retry covers
- * the ordinary case of the database still coming up beside us; after that,
- * exit saying why.
- */
+/** Require PlatformConfig at startup; retry once, then exit on failure. */
 async function main() {
   const env = loadEnv();
-  const db = getDb(env);
+  getDb(env); // Validate application database bootstrap.
 
   for (let attempt = 1; ; attempt++) {
     try {
-      await refreshConfig(db);
-      console.log(`[settings] ${env.SETTINGS_MODE} configuration read`);
+      await refreshConfig();
+      console.log('[settings] PlatformConfig configuration read');
       break;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -39,9 +24,8 @@ async function main() {
       }
       console.error(`[settings] ${message}`);
       console.error(
-        '[settings] Cannot start. Check DB_HOST/DB_USER/DB_NAME for the Echo database, ' +
-          'that echo_tbl_Settings exists in it, and NOCODB_BASE_URL/NOCODB_API_TOKEN ' +
-          "(or /data/config.json from identity's config volume) for PARENT_DOMAIN."
+        '[settings] Cannot start. Check application DB coordinates and service-owned ' +
+          'NOCODB_BASE_URL/NOCODB_API_TOKEN for PlatformConfig/cfg_tbl_Setting.'
       );
       process.exit(1);
     }

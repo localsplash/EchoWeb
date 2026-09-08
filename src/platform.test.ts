@@ -9,16 +9,9 @@ const fake = vi.hoisted(() => ({
 }));
 vi.mock('./db', () => ({
   getDb: () => ({
-    query: async (sql: string, args: unknown[]) => {
+    query: async (sql: string) => {
       fake.queries.push(sql);
-      if (!sql.includes('echo_tbl_PlatformOrgMap'))
-        throw new Error('Unexpected legacy authority query');
-      return [
-        fake.mappings.filter((m) =>
-          (args[0] as number[]).includes(m.iTenantId as number),
-        ),
-        [],
-      ];
+      throw new Error('Identity authorization must not query Echo tables');
     },
   }),
 }));
@@ -410,7 +403,7 @@ describe('Echo central authorization boundary', () => {
       ),
     ).toBe(true);
     expect(
-      fake.queries.every((sql) => sql.includes('echo_tbl_PlatformOrgMap')),
+      fake.queries.length === 0,
     ).toBe(true);
   });
   it('does not redeem unsolicited or mismatched callback state', async () => {
