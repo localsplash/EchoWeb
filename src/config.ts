@@ -1,22 +1,18 @@
 import { z } from 'zod';
-import mysql from 'mysql2/promise';
 import {
   CACHE_TTL_MS,
-  IdentitySettingsStore,
+  PlatformSettingsStore,
   Settings,
   SettingsUnavailableError,
-  readEchoSettings,
 } from './settings';
 
 /** Runtime config: PlatformConfig scopes echo-web -> echo -> *, overridden
- * by nonblank environment settings. SETTINGS_MODE=legacy explicitly selects the
- * old Echo SQL and IdentityBase readers during rollout. DB coordinates remain
- * process bootstrap in this bounded release; pools require restart to change. */
+ * by nonblank environment settings. DB coordinates remain process bootstrap;
+ * pools require restart to change. No SQL/IdentityBase settings readers remain. */
 const envSchema = z.object({
   NODE_ENV: z.string().default('development'),
   PORT: z.coerce.number().default(3160),
   LOG_LEVEL: z.string().default('info'),
-  SETTINGS_MODE: z.enum(['platform', 'legacy']).default('platform'),
 
   // Echo application database pool coordinates remain deployment bootstrap.
   // Runtime settings use the selected PlatformConfig/legacy reader below.
@@ -26,7 +22,7 @@ const envSchema = z.object({
   DB_PASSWORD: z.string().default(''),
   DB_NAME: z.string().default(''),
 
-  // Service-owned NocoDB bootstrap. Optional local file: see localConfig.ts.
+  // Service-owned NocoDB bootstrap, provided directly by the deployment.
   NOCODB_BASE_URL: z.string().default(''),
   NOCODB_API_TOKEN: z.string().default(''),
 });
@@ -88,7 +84,7 @@ function overridesFromEnv(env: NodeJS.ProcessEnv = process.env): Settings {
   return overrides;
 }
 
-let identityStore: IdentitySettingsStore | null = null;
+let platformStore: PlatformSettingsStore | null = null;
 let snapshot: { at: number; config: AppConfig } | null = null;
 
 /** `https://<label>.<parent>`, or '' when the platform domain is unknown. */
@@ -129,12 +125,11 @@ function assemble(
 }
 
 /** Read the settings and replace the snapshot. Throws if they cannot be read. */
-export async function refreshConfig(db: mysql.Pool): Promise<AppConfig> {
+export async function refreshConfig(): Promise<AppConfig> {
   const env = loadEnv();
-  if (!identityStore) identityStore = new IdentitySettingsStore(env);
-  const identity = await identityStore.get();
+  if (!platformStore) platformStore = new PlatformSettingsStore(env);
+  const identity = await platformStore.get();
   const settings = {
-    ...(env.SETTINGS_MODE === 'legacy' ? await readEchoSettings(db) : {}),
     ...identity,
     ...overridesFromEnv(),
   };
@@ -179,12 +174,10 @@ export async function refreshConfig(db: mysql.Pool): Promise<AppConfig> {
 }
 
 /** Refresh only when the snapshot has aged out; used per request. */
-export async function ensureFreshConfig(
-  db: mysql.Pool,
-): Promise<AppConfig> {
+export async function ensureFreshConfig(): Promise<AppConfig> {
   if (snapshot && Date.now() - snapshot.at < CACHE_TTL_MS)
     return snapshot.config;
-  return refreshConfig(db);
+  return refreshConfig();
 }
 
 /**
@@ -205,7 +198,7 @@ export function loadConfig(): AppConfig {
 /** Drop the snapshot; the retry path. */
 export function invalidateConfig(): void {
   snapshot = null;
-  identityStore?.invalidate();
+  platformStore?.invalidate();
 }
 
 /** Test seam: install a snapshot without touching the database. */

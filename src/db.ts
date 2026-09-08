@@ -9,7 +9,7 @@ let pool: mysql.Pool | null = null;
  * Its coordinates come from the environment rather than from the settings,
  * because this is where the settings themselves live — a database cannot
  * carry its own address. Everything else about this app is a row in
- * echo_tbl_Settings.
+ * PlatformConfig runtime settings.
  */
 export function getDb(config: EnvConfig): mysql.Pool {
   if (!pool) {

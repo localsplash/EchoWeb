@@ -181,7 +181,7 @@ export function buildApp() {
    * unreachable / missing / ambiguous it was.
    */
   app.use((_req, _res, next) => {
-    ensureFreshConfig(db).then(() => next(), next);
+    ensureFreshConfig().then(() => next(), next);
   });
 
   app.use((req, res, next) => {

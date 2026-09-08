@@ -1,20 +1,26 @@
 # EchoWeb
 
-Echo's messaging browser and backend-for-frontend. Identity owns users, businesses, memberships and browser sessions; EchoService owns messaging operations; EchoDatabase owns historical records and reviewed canonical-ID/number mappings. This app reads its mappings from MySQL and sends messaging operations through `ECHO_SERVICE_BASE_URL`.
+Echo's messaging browser and backend-for-frontend. Identity owns users, businesses, memberships and browser sessions; EchoService owns messaging operations; EchoDatabase owns messaging and media records. This app reads messaging/media ownership from MySQL and sends messaging operations through `ECHO_SERVICE_BASE_URL`.
 
 ## Development and configuration
 
 Use Node 22: `npm ci`, then `npm run dev`. EchoWeb does not load `.env` itself; export its values or pass them through Docker Compose. Copy `.env.example` and configure the Echo database and NocoDB bootstrap credentials. Database coordinates remain explicit process settings in this foundation release; moving those into the initial NocoDB bootstrap is a separate deployment change.
 
-By default `SETTINGS_MODE=platform` reads `PlatformConfig/cfg_tbl_Setting` through NocoDB. Resolution is nonblank environment overrides, exact `echo-web`, declared parent `echo`, then global `*`. Blank seeded rows are unset; duplicate bases, tables and scoped keys fail. Runtime reads never create configuration. Settings and resolved IDs refresh every 30 seconds; failures return 503. `/healthz` remains configuration independent. Coordinate changes require restart.
+The only runtime settings source is `PlatformConfig/cfg_tbl_Setting` through NocoDB. Resolution is nonblank environment overrides, exact `echo-web`, declared parent `echo`, then global `*`. Blank seeded rows are unset; duplicate bases, tables and scoped keys fail. Runtime reads never create configuration. Settings and resolved IDs refresh every 30 seconds; failures return 503. `/healthz` remains configuration independent. Coordinate changes require restart.
 
 Required application settings are `PARENT_DOMAIN`, `ECHO_SERVICE_BASE_URL` and, where service network trust needs it, `IDENTITY_CLIENT_SECRET`. Public defaults derive from the whitelabel domain: `https://echo.X.TLD`, `https://identity.X.TLD`, `https://media-echo.X.TLD`. URLs can be overridden explicitly. No provider OAuth credentials belong in EchoWeb.
 
-`SETTINGS_MODE=legacy` explicitly reads the older Echo SQL settings plus `IdentityBase/auth_tbl_Settings` during coordinated rollout. It still requires Identity v2 for authentication. There is no automatic fallback from canonical to legacy settings and no settings writer here. Keep the existing Identity bootstrap volume/UID only as long as the deployment still depends on `/data/config.json`; explicit NOCODB environment values take precedence.
+Provide service-owned `NOCODB_BASE_URL` and `NOCODB_API_TOKEN` directly in the
+deployment environment. The legacy SQL/IdentityBase readers, settings-mode
+switch and optional Identity bootstrap-file reader have been removed.
 
 ## Central-session cutover
 
-Deploy after [Identity PR #18](https://github.com/localsplash/identity/pull/18) and EchoDatabase migration 012, following that repository's `docs/PLATFORM_MAPPING_CUTOVER.md`. Review/import every legacy Echo organization/number-to-tenant mapping and establish equivalent central memberships before switching the application. Existing people, organization IDs, messages, membership and session rows are retained. This version does not create or read local authentication rows as authority, auto-claim CRM accounts by email, or silently assume legacy IDs equal canonical IDs.
+Identity owns users, tenants, memberships, central sessions and tenant-number
+assignments. Echo no longer needs local auth/provenance tables or a mapping
+import before accepting a central session. The disposable Dev cleanup removes
+those obsolete tables with EchoDatabase migration 013 while retaining active
+messaging/media records.
 
 The browser exchanges a state-bound Identity code and receives an opaque central application token in `__Host-echo_platform_session` (Secure, HttpOnly, SameSite=Lax). The old `echo_session` cookie is ignored and cleared during the new login/logout; existing users authenticate through the preserved central SSO account. An unsolicited UISP/Identity entry starts a state-bound handoff before redemption. Sign-in methods and account management redirect to Identity.
 
@@ -22,7 +28,7 @@ Every authenticated request introspects current Identity session and membership 
 
 Browser mutations require an Origin matching `APP_BASE_URL`. Messaging proxies inject the authorized number after any input body and remove browser authentication headers from multipart forwarding. Carrier administration is SUPER_ADMIN-only for this POC; ordinary account settings redirect to Identity. Tenant-specific carrier credential management remains a later bounded change.
 
-Number reassignment is unsupported until historical message/media ownership is independently modeled. Legacy organization edits do not change access: current Identity number assignments are the only number authority. Raw EchoService and EchoMedia endpoints remain their existing trust boundary; do not expose those legacy APIs as authenticated multi-tenant services merely because this browser now checks memberships. This PR does not remediate public media URLs or rework carrier callbacks.
+Number reassignment is unsupported until historical message/media ownership is independently modeled. Current Identity number assignments are the only number authority. Raw EchoService and EchoMedia endpoints remain their existing trust boundary; do not expose those legacy APIs as authenticated multi-tenant services merely because this browser now checks memberships. This PR does not remediate public media URLs or rework carrier callbacks.
 
 ## Validation
 
@@ -36,7 +42,12 @@ docker run --rm --network platform-test \
   echo-web-platform:test npm test -- src/platform.integration.test.ts
 ```
 
-It recreates only `echo_platform_test`; never point it at a production server. The suite executes the actual SQL migration twice and the actual dry-run/apply importer, verifies preserved history, separate tenant access, several numbers per tenant, rejected remappings and mapping drift. Live SMS/MMS/carrier and browser proxy acceptance remain deployment checks, not claims made by these isolated tests.
+It recreates only `echo_platform_test` on an isolated test server. The suite runs
+the full current fresh schema, executes a messaging routine, then creates
+populated legacy fixtures and applies migration 013 twice. It verifies that the
+nine retired tables disappear, messaging and ledger rows remain, and current
+Identity session authorization works without local auth/mapping tables. Live
+carrier and browser acceptance remain deployment checks.
 
 `IDENTITY_BASE_URL` is the server API origin (for example, `http://identity-preview:3200`). Set optional `IDENTITY_PUBLIC_BASE_URL` to the browser-facing HTTPS origin when Docker DNS differs from public DNS; it defaults to `IDENTITY_BASE_URL`. Token exchange, session checks and tenant selection always use the internal API origin.
 
@@ -44,41 +55,28 @@ Set `MEDIA_INTERNAL_BASE_URL` to the private EchoMedia origin (for example, `htt
 
 ## Shared tenant numbers and SSO
 
-Deploy Identity migration `0005_shared_phone_numbers` first and backfill reviewed tenant-number assignments. Echo now requires the `numbers` field in central session introspection and does not query `echo_tbl_PlatformOrgMap` to authorize users. That table and its importer remain for historical provenance/reconciliation only. Legacy message/media IDs and data stay in EchoDatabase.
+Deploy Identity migration `0005_shared_phone_numbers` first and backfill reviewed tenant-number assignments. Echo now requires the `numbers` field in central session introspection and does not query `echo_tbl_PlatformOrgMap` to authorize users. The obsolete mapping tables and importer are removed. Active message/media IDs and data stay in EchoDatabase.
 
 Manage numbers and memberships together in AidaAdmin. Every enabled tenant member (including USER) inherits the explicit `TENANT_MEMBERS` number policy. A member can sign in without numbers and receives a message to contact their Tenant Admin. Multiple numbers are supported; selection remains tenant-scoped and revalidated on every request. `iOrgId` in `/api/me` is now nullable metadata.
 
 Opening Echo automatically starts the state-bound Identity handoff. An existing Identity SSO session completes it without another provider login. Each application retains its own secure cookie. Explicit Echo logout stays on the signed-out page; selecting sign-in can reuse Identity SSO again. Check both the proxy manager’s saved upstream and generated configuration when switching from an older Echo container.
 
-## Settings retirement sequence
+## Disposable Dev retirement
 
-[Issue #21](https://github.com/localsplash/EchoWeb/issues/21) has an implemented
-PlatformConfig default. The remaining work is coordinated deployment acceptance
-and eventual compatibility removal. `SETTINGS_MODE=legacy` deliberately retains
-`echo_tbl_Settings` plus `IdentityBase/auth_tbl_Settings` for rollback; a source
-failure in platform mode never selects those readers automatically.
+This Dev deployment intentionally discards obsolete settings, local authentication
+and provenance objects. There is no legacy settings mode, rollback copy or
+preservation window. Deploy the matching EchoWeb/EchoService revisions and then
+apply EchoDatabase `013_retire_legacy_configuration_and_auth.sql`. Fresh schema
+initialization no longer creates the retired tables.
 
-Before deploying, verify `*`, `echo`, and `echo-web` effective values and the
-service-owned NocoDB token. Keep DB coordinates in the deployment environment for
-this release; the pool requires restart. EchoOrchestrator supplies each service's
-NocoDB bootstrap directly so its normal deployment no longer shares Identity's
-configuration volume. Retain the existing container UID for volume ownership
-where needed.
+Validate service-owned PlatformConfig credentials, central sign-in, tenant/number
+selection, SMS/MMS, settings refresh/failure/recovery, and private authenticated
+media access. Use `MEDIA_INTERNAL_BASE_URL`, reject cross-tenant paths, and remove
+public upstream access to raw EchoMedia. Record actual deployed versions and
+results in [EchoOrchestrator #11](https://github.com/localsplash/EchoOrchestrator/issues/11).
+A code merge alone is not deployment evidence.
 
-Record deployed versions and results for central sign-in, tenant/number selection,
-SMS/MMS, the authenticated media proxy, runtime settings refresh, store outages,
-and rollback in [EchoOrchestrator #11](https://github.com/localsplash/EchoOrchestrator/issues/11).
-A dev merge and isolated tests do not constitute this live acceptance. EchoService
-must run its scoped PlatformConfig reader too; EchoMedia's current port and mount
-path remain environment-only and do not require a settings reader.
-
-Preserve both the old table and explicit compatibility deployments until all
-consumers have migrated and passed deployment checks, and the agreed rollback
-window has ended. Then remove compatibility readers in a following release before
-[EchoDatabase #8](https://github.com/localsplash/EchoDatabase/issues/8) drops the
-table. `echo_tbl_SchemaMigration` stays as the schema ledger.
-
-PBX extensions, queues, queue membership and live operational state belong to
-Asterisk/OfficePulse. Business ownership and tenant access belong to Identity and
-AidaAdmin. EchoWeb does not track extension provisioning, replicas or synchronization
-status. AidaAgent and AidaHandset remain outside this work.
+PBX extensions, queues, queue membership and operational state belong to
+Asterisk/OfficePulse. Business/tenant administration belongs to Identity/AidaAdmin.
+Echo does not track PBX provisioning replicas or synchronization status.
+AidaAgent/AidaHandset remain outside this work.
