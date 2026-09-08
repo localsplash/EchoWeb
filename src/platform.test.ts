@@ -67,6 +67,19 @@ beforeEach(() => {
       token,
       {
         active: true,
+        numbers: fake.mappings
+          .filter((m) => m.iTenantId === 11)
+          .map((m, i) => ({
+            iPhoneNumberId: i + 1,
+            iTenantId: Number(m.iTenantId),
+            phoneNumber: `+1${m.iBusinessNumber}`,
+            label: '',
+            bVoice: true,
+            bMessaging: true,
+            bEnabled: true,
+            accessPolicy: 'TENANT_MEMBERS' as const,
+            iVersion: 1,
+          })),
         user: {
           iUserId: 91,
           email: 'user@x.tld',
@@ -81,6 +94,17 @@ beforeEach(() => {
       rootToken,
       {
         active: true,
+        numbers: fake.mappings.map((m, i) => ({
+          iPhoneNumberId: i + 1,
+          iTenantId: Number(m.iTenantId),
+          phoneNumber: `+1${m.iBusinessNumber}`,
+          label: '',
+          bVoice: true,
+          bMessaging: true,
+          bEnabled: true,
+          accessPolicy: 'TENANT_MEMBERS' as const,
+          iVersion: 1,
+        })),
         user: {
           iUserId: 92,
           email: 'staff@x.tld',
@@ -137,6 +161,36 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 describe('Echo central authorization boundary', () => {
+  it('starts shared SSO automatically and leaves logout/error pages accessible', async () => {
+    const app = buildApp();
+    expect((await request(app).get('/')).headers.location).toBe(
+      '/auth/identity',
+    );
+    expect((await request(app).get('/?signed_out=1')).status).toBe(200);
+    expect((await request(app).get('/?auth_error=denied')).status).toBe(200);
+  });
+  it('admits ordinary members without legacy records and shows a warning when no numbers exist', async () => {
+    fake.mappings = [];
+    sessions.get(token)!.tenants[0].role = 'USER';
+    expect(
+      (await request(buildApp()).get('/api/me').set('Cookie', cookie())).body
+        .iBusinessNumber,
+    ).toBe(7145550001);
+    expect(fake.queries).toEqual([]);
+    sessions.get(token)!.numbers = [];
+    const result = await request(buildApp())
+      .get('/choose-business')
+      .set('Cookie', cookie());
+    expect(result.status).toBe(200);
+    expect(result.text).toContain('Please speak to your Tenant Admin');
+    expect(
+      (
+        await request(buildApp())
+          .get('/api/conversations')
+          .set('Cookie', cookie())
+      ).status,
+    ).toBe(403);
+  });
   it('uses the public Identity origin only for browser sign-in', async () => {
     setConfigForTesting({
       ...loadConfig(),
@@ -196,7 +250,7 @@ describe('Echo central authorization boundary', () => {
     expect(me.body).toMatchObject({
       iUserId: 91,
       iTenantId: 11,
-      iOrgId: 1,
+      iOrgId: null,
       isSuperAdmin: false,
       iBusinessNumber: 7145550001,
     });
@@ -312,15 +366,16 @@ describe('Echo central authorization boundary', () => {
     ).toBe(503);
     expect(fake.queries).toHaveLength(0);
   });
-  it('rejects mapping drift instead of granting the replacement business history', async () => {
+  it('ignores legacy mapping drift and keeps the canonical number bound', async () => {
     fake.mappings[0].currentNumber = 7145550099;
-    expect(
-      (
-        await request(buildApp())
-          .get('/api/conversations')
-          .set('Cookie', cookie())
-      ).status,
-    ).toBe(403);
+    const result = await request(buildApp())
+      .get('/api/conversations')
+      .set('Cookie', cookie());
+    expect(result.status).toBe(200);
+    expect(calls.at(-1)?.url.searchParams.get('businessNumber')).toBe(
+      '7145550001',
+    );
+    expect(fake.queries).toEqual([]);
   });
   it('completes a state-bound central login without local person or session provisioning', async () => {
     const original = fetch;
