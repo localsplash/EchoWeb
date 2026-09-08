@@ -49,3 +49,36 @@ Deploy Identity migration `0005_shared_phone_numbers` first and backfill reviewe
 Manage numbers and memberships together in AidaAdmin. Every enabled tenant member (including USER) inherits the explicit `TENANT_MEMBERS` number policy. A member can sign in without numbers and receives a message to contact their Tenant Admin. Multiple numbers are supported; selection remains tenant-scoped and revalidated on every request. `iOrgId` in `/api/me` is now nullable metadata.
 
 Opening Echo automatically starts the state-bound Identity handoff. An existing Identity SSO session completes it without another provider login. Each application retains its own secure cookie. Explicit Echo logout stays on the signed-out page; selecting sign-in can reuse Identity SSO again. Check both the proxy manager’s saved upstream and generated configuration when switching from an older Echo container.
+
+## Settings retirement sequence
+
+[Issue #21](https://github.com/localsplash/EchoWeb/issues/21) has an implemented
+PlatformConfig default. The remaining work is coordinated deployment acceptance
+and eventual compatibility removal. `SETTINGS_MODE=legacy` deliberately retains
+`echo_tbl_Settings` plus `IdentityBase/auth_tbl_Settings` for rollback; a source
+failure in platform mode never selects those readers automatically.
+
+Before deploying, verify `*`, `echo`, and `echo-web` effective values and the
+service-owned NocoDB token. Keep DB coordinates in the deployment environment for
+this release; the pool requires restart. EchoOrchestrator supplies each service's
+NocoDB bootstrap directly so its normal deployment no longer shares Identity's
+configuration volume. Retain the existing container UID for volume ownership
+where needed.
+
+Record deployed versions and results for central sign-in, tenant/number selection,
+SMS/MMS, the authenticated media proxy, runtime settings refresh, store outages,
+and rollback in [EchoOrchestrator #11](https://github.com/localsplash/EchoOrchestrator/issues/11).
+A dev merge and isolated tests do not constitute this live acceptance. EchoService
+must run its scoped PlatformConfig reader too; EchoMedia's current port and mount
+path remain environment-only and do not require a settings reader.
+
+Preserve both the old table and explicit compatibility deployments until all
+consumers have migrated and passed deployment checks, and the agreed rollback
+window has ended. Then remove compatibility readers in a following release before
+[EchoDatabase #8](https://github.com/localsplash/EchoDatabase/issues/8) drops the
+table. `echo_tbl_SchemaMigration` stays as the schema ledger.
+
+PBX extensions, queues, queue membership and live operational state belong to
+Asterisk/OfficePulse. Business ownership and tenant access belong to Identity and
+AidaAdmin. EchoWeb does not track extension provisioning, replicas or synchronization
+status. AidaAgent and AidaHandset remain outside this work.

@@ -5,10 +5,8 @@ import path from 'node:path';
  * The bootstrap file — how this app finds the settings base whose address it
  * cannot read out of that base.
  *
- * Deliberately the same two keys, path and precedence as identity's
- * `src/localConfig.ts` and EchoService's `src/localConfig.js`, so three apps
- * that bootstrap identically can share one file: identity's `/setup` writes
- * it, and this app finds it already mounted read-only at `/data`.
+ * The optional file is service-owned and carries only the NocoDB address and
+ * read token. Normal deployment injects both keys without an Identity volume.
  *
  * Environment first, so a deployment that states these as variables never
  * grows a file it did not ask for. Blank counts as unset.
@@ -27,6 +25,7 @@ export function applyLocalConfig(
   env: NodeJS.ProcessEnv = process.env,
   file: string = LOCAL_CONFIG_PATH
 ): void {
+  if (KEYS.every((key) => env[key]?.trim())) return;
   let raw: string;
   try {
     raw = fs.readFileSync(file, 'utf8');

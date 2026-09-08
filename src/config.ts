@@ -18,18 +18,15 @@ const envSchema = z.object({
   LOG_LEVEL: z.string().default('info'),
   SETTINGS_MODE: z.enum(['platform', 'legacy']).default('platform'),
 
-  // The Echo database. Its coordinates are the one thing that has to be
-  // stated outside it — everything else about this app lives in
-  // echo_tbl_Settings.
+  // Echo application database pool coordinates remain deployment bootstrap.
+  // Runtime settings use the selected PlatformConfig/legacy reader below.
   DB_HOST: z.string().default(''),
   DB_PORT: z.coerce.number().default(3306),
   DB_USER: z.string().default(''),
   DB_PASSWORD: z.string().default(''),
   DB_NAME: z.string().default(''),
 
-  // Where to read PARENT_DOMAIN and IDENTITY_CLIENT_SECRET from. On a
-  // single-host install these arrive in identity's own bootstrap file,
-  // mounted read-only at /data — see localConfig.ts.
+  // Service-owned NocoDB bootstrap. Optional local file: see localConfig.ts.
   NOCODB_BASE_URL: z.string().default(''),
   NOCODB_API_TOKEN: z.string().default(''),
 });
@@ -40,7 +37,7 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): EnvConfig {
   return envSchema.parse(env);
 }
 
-/** The keys this app reads out of `echo_tbl_Settings`. */
+/** Runtime setting keys, with explicit environment overrides. */
 export const SETTING_KEYS = [
   'PARENT_DOMAIN',
   'IDENTITY_BASE_URL',
@@ -67,7 +64,7 @@ export interface AppConfig extends EnvConfig {
   UISP_PLUGIN_URL: string;
   PUSHER_KEY: string;
   PUSHER_CLUSTER: string;
-  /** From IdentityBase — the platform's, not this app's. */
+  /** Shared platform domain from the selected settings source. */
   PARENT_DOMAIN: string;
   IDENTITY_CLIENT_SECRET: string;
   /** Derived from PARENT_DOMAIN unless a row pins it. */
