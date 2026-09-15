@@ -6,8 +6,8 @@ import {
   SettingsUnavailableError,
 } from './settings';
 
-/** Runtime config: PlatformConfig scopes echo-web -> echo -> *, overridden
- * by nonblank environment settings. DB coordinates remain process bootstrap;
+/** Runtime config: PlatformConfig scopes echo-web -> echo -> * are the only
+ * source for business settings. DB coordinates remain process bootstrap;
  * pools require restart to change. No SQL/IdentityBase settings readers remain. */
 const envSchema = z.object({
   NODE_ENV: z.string().default('development'),
@@ -41,7 +41,9 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): EnvConfig {
   return envSchema.parse(env);
 }
 
-/** Runtime setting keys, with explicit environment overrides. */
+/** Runtime setting keys, read only from cfg_tbl_Setting. A same-named
+ * environment variable is ignored: two homes for one value meant a row could be
+ * edited with no effect and nothing on the host to say why. */
 export const SETTING_KEYS = [
   'PARENT_DOMAIN',
   'IDENTITY_BASE_URL',
@@ -55,6 +57,8 @@ export const SETTING_KEYS = [
   'PUSHER_KEY',
   'PUSHER_CLUSTER',
 ] as const;
+
+type SettingKey = (typeof SETTING_KEYS)[number];
 
 export interface AppConfig extends EnvConfig {
   APP_BASE_URL: string;
@@ -70,21 +74,6 @@ export interface AppConfig extends EnvConfig {
   IDENTITY_PUBLIC_BASE_URL?: string;
 }
 
-/**
- * Any settings key may be pinned in the environment, where it wins over the
- * row — an override for deployments that manage configuration as
- * environment, not a default. Blank counts as unset.
- */
-function overridesFromEnv(env: NodeJS.ProcessEnv = process.env): Settings {
-  const overrides: Settings = {};
-  for (const key of SETTING_KEYS) {
-    const raw = env[key];
-    if (typeof raw === 'string' && raw.trim() !== '')
-      overrides[key] = raw.trim();
-  }
-  return overrides;
-}
-
 let platformStore: PlatformSettingsStore | null = null;
 let snapshot: { at: number; config: AppConfig } | null = null;
 
@@ -93,16 +82,12 @@ function hostUnder(parent: string, label: string): string {
   return parent ? `https://${label}.${parent}` : '';
 }
 
-function assemble(
-  env: EnvConfig,
-  settings: Settings,
-  identity: Settings,
-): AppConfig {
-  const value = (key: string): string => settings[key] ?? '';
-  const parent = identity.PARENT_DOMAIN ?? '';
+function assemble(env: EnvConfig, settings: Settings): AppConfig {
+  const value = (key: SettingKey): string => settings[key] ?? '';
+  const parent = value('PARENT_DOMAIN');
   // A row wins over the derived value; blank means derive. The naming scheme
   // is the platform's, so it lives here rather than in twelve rows.
-  const derived = (key: string, label: string): string =>
+  const derived = (key: SettingKey, label: string): string =>
     value(key) || hostUnder(parent, label);
   return {
     ...env,
@@ -111,7 +96,7 @@ function assemble(
     PUSHER_KEY: value('PUSHER_KEY'),
     PUSHER_CLUSTER: value('PUSHER_CLUSTER'),
     PARENT_DOMAIN: parent,
-    IDENTITY_CLIENT_SECRET: identity.IDENTITY_CLIENT_SECRET ?? '',
+    IDENTITY_CLIENT_SECRET: value('IDENTITY_CLIENT_SECRET'),
     IDENTITY_BASE_URL:
       value('IDENTITY_BASE_URL') || hostUnder(parent, 'identity'),
     IDENTITY_PUBLIC_BASE_URL:
@@ -125,12 +110,8 @@ function assemble(
 export async function refreshConfig(): Promise<AppConfig> {
   const env = loadEnv();
   if (!platformStore) platformStore = new PlatformSettingsStore(env);
-  const identity = await platformStore.get();
-  const settings = {
-    ...identity,
-    ...overridesFromEnv(),
-  };
-  const config = assemble(env, settings, settings);
+  const settings = await platformStore.get();
+  const config = assemble(env, settings);
   for (const key of [
     'PARENT_DOMAIN',
     'ECHO_SERVICE_BASE_URL',
