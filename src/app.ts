@@ -216,9 +216,10 @@ export function buildApp() {
     res.set('Cache-Control', 'public, max-age=300');
     res.send(
       `window.ECHO_CONFIG=${JSON.stringify({
-        MEDIA_BASE_URL: current.MEDIA_INTERNAL_BASE_URL
-          ? '/api/media'
-          : current.MEDIA_BASE_URL,
+        // The same-origin route, never the private origin behind it. A
+        // constant today, still emitted so the path can move without
+        // shipping new browser code.
+        MEDIA_BASE_URL: '/media',
         UISP_PLUGIN_URL: current.UISP_PLUGIN_URL,
         // The Pusher key and cluster are public by design — the client has to
         // present the key to connect. The app id and secret stay in

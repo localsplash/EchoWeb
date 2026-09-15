@@ -36,7 +36,7 @@ export function registerMediaRoute(
     req: express.Request,
   ) => Promise<PlatformSession | null>,
 ): void {
-  app.get(/^\/api\/media\/(.+)$/, async (req, res) => {
+  app.get(/^\/media\/(.+)$/, async (req, res) => {
     // The current central membership and selected business are resolved on every
     // file request, including thumbnails and byte-range requests.
     const session = await resolveSession(req);
@@ -47,7 +47,7 @@ export function registerMediaRoute(
         .status(403)
         .json({ error: 'Choose an authorized business' });
     const storedPath = mediaPath(
-      req.originalUrl.slice('/api/media'.length),
+      req.originalUrl.slice('/media'.length),
     );
     if (!storedPath)
       return void res.status(400).json({ error: 'Invalid media path' });

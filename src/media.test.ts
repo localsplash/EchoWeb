@@ -42,21 +42,21 @@ afterEach(() => vi.unstubAllGlobals());
 describe('business-authorized private media', () => {
   it('requires a current session and an authorized selected business', async () => {
     session = null;
-    expect((await request(app()).get('/api/media' + own)).status).toBe(
+    expect((await request(app()).get('/media' + own)).status).toBe(
       401,
     );
     session = {
       iBusinessNumber: null,
       bIsSuperAdmin: true,
     } as PlatformSession;
-    expect((await request(app()).get('/api/media' + own)).status).toBe(
+    expect((await request(app()).get('/media' + own)).status).toBe(
       403,
     );
     expect(query).not.toHaveBeenCalled();
     expect(fetchMedia).not.toHaveBeenCalled();
   });
   it('denies media belonging to a different business before any upstream request', async () => {
-    expect((await request(app()).get('/api/media' + other)).status).toBe(
+    expect((await request(app()).get('/media' + other)).status).toBe(
       404,
     );
     expect(query.mock.calls[0][1]).toEqual([
@@ -72,7 +72,7 @@ describe('business-authorized private media', () => {
   it.each([own, '/7145550001/7145550009/thumb.png'])(
     'streams an owned stored path or thumbnail: %s',
     async (storedPath) => {
-      const result = await request(app()).get('/api/media' + storedPath);
+      const result = await request(app()).get('/media' + storedPath);
       expect(result.status).toBe(200);
       expect(result.body.toString()).toBe('image bytes');
       expect(result.headers['cache-control']).toBe('private, no-store');
@@ -93,7 +93,7 @@ describe('business-authorized private media', () => {
     '/file?url=https://evil.tld',
     '/a/%00',
   ])('rejects ambiguous and unsafe paths: %s', async (bad) => {
-    const response = await request(app()).get('/api/media' + bad);
+    const response = await request(app()).get('/media' + bad);
     expect([400, 404]).toContain(response.status);
     expect(fetchMedia).not.toHaveBeenCalled();
   });
@@ -109,7 +109,7 @@ describe('business-authorized private media', () => {
         }),
     );
     const result = await request(app())
-      .get('/api/media' + own)
+      .get('/media' + own)
       .set('Range', 'bytes=0-2');
     expect(result.status).toBe(206);
     expect(result.headers['content-range']).toBe('bytes 0-2/99');
@@ -120,7 +120,7 @@ describe('business-authorized private media', () => {
     expect(
       (
         await request(app())
-          .get('/api/media' + own)
+          .get('/media' + own)
           .set('Range', 'bytes=0-2,9-10')
       ).status,
     ).toBe(400);
@@ -133,7 +133,7 @@ describe('business-authorized private media', () => {
           headers: { 'Content-Type': 'text/html' },
         }),
     );
-    const result = await request(app()).get('/api/media' + own);
+    const result = await request(app()).get('/media' + own);
     expect(result.headers['content-type']).toBe(
       'application/octet-stream',
     );
@@ -148,7 +148,7 @@ describe('business-authorized private media', () => {
           headers: { Location: 'http://secret.invalid' },
         }),
     );
-    const result = await request(app()).get('/api/media' + own);
+    const result = await request(app()).get('/media' + own);
     expect(result.status).toBe(502);
     expect(result.headers.location).toBeUndefined();
     expect(result.text).not.toContain('secret.invalid');

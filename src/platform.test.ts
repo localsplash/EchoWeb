@@ -227,12 +227,10 @@ describe('Echo central authorization boundary', () => {
     setConfigForTesting({
       ...loadConfig(),
       MEDIA_INTERNAL_BASE_URL: 'http://echo-media:8082',
-      MEDIA_BASE_URL: 'https://legacy-media.x.tld',
     });
     const response = await request(buildApp()).get('/config.js');
-    expect(response.text).toContain('"MEDIA_BASE_URL":"/api/media"');
+    expect(response.text).toContain('"MEDIA_BASE_URL":"/media"');
     expect(response.text).not.toContain('echo-media');
-    expect(response.text).not.toContain('legacy-media');
   });
   it('ignores legacy sessions and returns current central user identifiers', async () => {
     const app = buildApp();

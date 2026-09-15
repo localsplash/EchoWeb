@@ -40,7 +40,6 @@ export const SETTING_KEYS = [
   'IDENTITY_PUBLIC_BASE_URL',
   'IDENTITY_CLIENT_SECRET',
   'ECHO_SERVICE_BASE_URL',
-  'MEDIA_BASE_URL',
   'MEDIA_INTERNAL_BASE_URL',
   'APP_BASE_URL',
   'UISP_PLUGIN_URL',
@@ -53,9 +52,13 @@ export const SETTING_KEYS = [
 
 export interface AppConfig extends EnvConfig {
   ECHO_SERVICE_BASE_URL: string;
-  MEDIA_BASE_URL: string;
-  /** Private EchoMedia origin. When set, browsers use the authenticated proxy. */
-  MEDIA_INTERNAL_BASE_URL?: string;
+  /**
+   * Private EchoMedia origin, dialled only by this server. Its value never
+   * reaches the browser: attachments are served through the same-origin
+   * `/media` route, which authorizes every request. Required — there is no
+   * public-media fallback.
+   */
+  MEDIA_INTERNAL_BASE_URL: string;
   APP_BASE_URL: string;
   UISP_PLUGIN_URL: string;
   PUSHER_KEY: string;
@@ -107,7 +110,6 @@ function assemble(
     ...env,
     // Internal, container-to-container: not a public hostname and not derived.
     ECHO_SERVICE_BASE_URL: value('ECHO_SERVICE_BASE_URL'),
-    MEDIA_BASE_URL: derived('MEDIA_BASE_URL', 'media-echo'),
     MEDIA_INTERNAL_BASE_URL: value('MEDIA_INTERNAL_BASE_URL'),
     APP_BASE_URL: derived('APP_BASE_URL', 'echo'),
     UISP_PLUGIN_URL: value('UISP_PLUGIN_URL'),
@@ -139,6 +141,7 @@ export async function refreshConfig(): Promise<AppConfig> {
     'ECHO_SERVICE_BASE_URL',
     'APP_BASE_URL',
     'IDENTITY_BASE_URL',
+    'MEDIA_INTERNAL_BASE_URL',
   ] as const) {
     if (!config[key])
       throw new SettingsUnavailableError(
