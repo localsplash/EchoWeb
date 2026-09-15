@@ -1,3 +1,4 @@
+import { buildInfo } from './buildInfo';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import request from 'supertest';
 import { buildApp } from './app';
@@ -418,4 +419,12 @@ describe('Echo central authorization boundary', () => {
     ).toContain('auth_error=state');
     expect(calls).toHaveLength(0);
   });
+});
+
+it('reports build identity without authentication, settings, or database calls', async () => {
+  const health = await request(buildApp()).get('/healthz');
+  expect(health.status).toBe(200);
+  expect(health.body).toEqual({ ok: true, service: 'EchoWeb', ...buildInfo });
+  expect(fake.queries).toHaveLength(0);
+  expect(calls).toHaveLength(0);
 });

@@ -1,3 +1,4 @@
+import './timezone';
 import { buildApp } from './app';
 import { loadEnv, refreshConfig } from './config';
 import { getDb } from './db';

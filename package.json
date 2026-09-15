@@ -4,13 +4,14 @@
   "description": "Echo web frontend",
   "main": "dist/server.js",
   "scripts": {
-    "test": "vitest run",
-    "build": "tsc -p tsconfig.build.json",
+    "test": "npm run test:version && vitest run",
+    "build": "tsc -p tsconfig.build.json && node scripts/write-build-info.mjs dist/build-info.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/server.js",
     "dev": "tsx watch src/server.ts",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "test:version": "node --test scripts/check-build-info.mjs"
   },
   "keywords": [],
   "author": "",

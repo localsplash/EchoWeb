@@ -3,12 +3,18 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
+ARG BUILD_REVISION
+ARG SOURCE_DATE_EPOCH
+ARG BUILD_DIRTY
 RUN npm run build
 
 FROM build AS test
+RUN apk add --no-cache git
 RUN npm test
 
 FROM node:22-alpine AS runtime
+RUN apk add --no-cache tzdata
+ENV TZ=America/Los_Angeles
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app/package*.json ./

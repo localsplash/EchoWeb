@@ -3,9 +3,15 @@
 # deployment environment. No Identity configuration volume is used.
 services:
   echo-web:
-    build: .
+    build:
+      context: .
+      args:
+        BUILD_REVISION: ${BUILD_REVISION:?Export Git HEAD before building}
+        SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:?Export Git committer epoch before building}
+        BUILD_DIRTY: ${BUILD_DIRTY:?Export Git dirty state before building}
     container_name: echo-web
     environment:
+      TZ: ${TZ:-America/Los_Angeles}
       PORT: "3160"
       LOG_LEVEL: ${LOG_LEVEL:-info}
       DB_HOST: ${DB_HOST:-host.docker.internal}

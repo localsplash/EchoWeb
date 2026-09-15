@@ -23,7 +23,20 @@ paths:
       security: []
       summary: Configuration-independent process health
       responses:
-        '200': {description: Process is running}
+        '200':
+          description: Process is running; source identity is independent of dependencies
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: {type: boolean, example: true}
+                  service: {type: string, example: EchoWeb}
+                  version: {type: string, example: '2026.9.14.14.30', description: 'Pacific commit time YYYY.M.D.H.M; -dirty for uncommitted changes; unbuilt in source development'}
+                  revision: {type: string, nullable: true, description: Full Git commit ID}
+                  sourceUpdatedAt: {type: string, format: date-time, nullable: true, example: '2026-09-14T14:30:42-07:00'}
+                  timeZone: {type: string, example: America/Los_Angeles}
+                  dirty: {type: boolean, nullable: true}
   /readyz:
     get:
       security: []
