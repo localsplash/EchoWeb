@@ -25,6 +25,14 @@ const envSchema = z.object({
   // Service-owned NocoDB bootstrap, provided directly by the deployment.
   NOCODB_BASE_URL: z.string().default(''),
   NOCODB_API_TOKEN: z.string().default(''),
+
+  // Container topology: which address on the internal network answers for a
+  // sibling service. Compose assigns these names, so compose is where they
+  // belong — not a settings row that can drift from the file that defines
+  // them. The defaults are the standard stack; override only where the
+  // service names differ, as in a preview environment.
+  ECHO_SERVICE_BASE_URL: z.string().default('http://echo-service:8080'),
+  MEDIA_INTERNAL_BASE_URL: z.string().default('http://echo-media:8082'),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
@@ -39,8 +47,6 @@ export const SETTING_KEYS = [
   'IDENTITY_BASE_URL',
   'IDENTITY_PUBLIC_BASE_URL',
   'IDENTITY_CLIENT_SECRET',
-  'ECHO_SERVICE_BASE_URL',
-  'MEDIA_INTERNAL_BASE_URL',
   'APP_BASE_URL',
   'UISP_PLUGIN_URL',
   // Only the two public halves — the app id and the secret belong to
@@ -51,14 +57,6 @@ export const SETTING_KEYS = [
 ] as const;
 
 export interface AppConfig extends EnvConfig {
-  ECHO_SERVICE_BASE_URL: string;
-  /**
-   * Private EchoMedia origin, dialled only by this server. Its value never
-   * reaches the browser: attachments are served through the same-origin
-   * `/media` route, which authorizes every request. Required — there is no
-   * public-media fallback.
-   */
-  MEDIA_INTERNAL_BASE_URL: string;
   APP_BASE_URL: string;
   UISP_PLUGIN_URL: string;
   PUSHER_KEY: string;
@@ -108,9 +106,6 @@ function assemble(
     value(key) || hostUnder(parent, label);
   return {
     ...env,
-    // Internal, container-to-container: not a public hostname and not derived.
-    ECHO_SERVICE_BASE_URL: value('ECHO_SERVICE_BASE_URL'),
-    MEDIA_INTERNAL_BASE_URL: value('MEDIA_INTERNAL_BASE_URL'),
     APP_BASE_URL: derived('APP_BASE_URL', 'echo'),
     UISP_PLUGIN_URL: value('UISP_PLUGIN_URL'),
     PUSHER_KEY: value('PUSHER_KEY'),

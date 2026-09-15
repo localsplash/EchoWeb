@@ -8,7 +8,9 @@ Use Node 22: `npm ci`, then `npm run dev`. EchoWeb does not load `.env` itself; 
 
 The only runtime settings source is `PlatformConfig/cfg_tbl_Setting` through NocoDB. Resolution is nonblank environment overrides, exact `echo-web`, declared parent `echo`, then global `*`. Blank seeded rows are unset; duplicate bases, tables and scoped keys fail. Runtime reads never create configuration. Settings and resolved IDs refresh every 30 seconds; failures return 503. `/healthz` remains configuration independent. Coordinate changes require restart.
 
-Required application settings are `PARENT_DOMAIN`, `ECHO_SERVICE_BASE_URL`, `MEDIA_INTERNAL_BASE_URL` and, where service network trust needs it, `IDENTITY_CLIENT_SECRET`. Public defaults derive from the whitelabel domain: `https://echo.X.TLD` and `https://identity.X.TLD`. URLs can be overridden explicitly. EchoMedia has no public hostname: it is reached only through this app's authorized `/media` route. No provider OAuth credentials belong in EchoWeb.
+Required application settings are `PARENT_DOMAIN` and, where service network trust needs it, `IDENTITY_CLIENT_SECRET`. Public defaults derive from the whitelabel domain: `https://echo.X.TLD` and `https://identity.X.TLD`. URLs can be overridden explicitly. EchoMedia has no public hostname: it is reached only through this app's authorized `/media` route. No provider OAuth credentials belong in EchoWeb.
+
+Addresses of sibling containers are not settings. `ECHO_SERVICE_BASE_URL` and `MEDIA_INTERNAL_BASE_URL` are process environment with defaults (`http://echo-service:8080`, `http://echo-media:8082`) matching the standard Compose stack, because Compose assigns those names and a settings row would only drift from the file that defines them. Override them where the service names differ, as in a preview environment.
 
 Provide service-owned `NOCODB_BASE_URL` and `NOCODB_API_TOKEN` directly in the
 deployment environment. The legacy SQL/IdentityBase readers, settings-mode
@@ -51,9 +53,9 @@ carrier and browser acceptance remain deployment checks.
 
 `IDENTITY_BASE_URL` is the server API origin (for example, `http://identity-preview:3200`). Set optional `IDENTITY_PUBLIC_BASE_URL` to the browser-facing HTTPS origin when Docker DNS differs from public DNS; it defaults to `IDENTITY_BASE_URL`. Token exchange, session checks and tenant selection always use the internal API origin.
 
-Set `MEDIA_INTERNAL_BASE_URL` to the private EchoMedia origin (for example, `http://echo-media-preview:8082`). Attachments are served through `/media/<stored-path>`; the browser receives only that same-origin route and never the private origin. Each image, thumbnail, draft or range request rechecks the central session and selected business, then verifies exact stored-path ownership in Echo's message/draft tables before streaming. Keep EchoMedia on a private network without a public proxy. Responses are private and uncached; active content downloads as an attachment.
+`MEDIA_INTERNAL_BASE_URL` is the private EchoMedia origin, defaulting to `http://echo-media:8082` and overridable where the service name differs (for example, `http://echo-media-preview:8082`). Attachments are served through `/media/<stored-path>`; the browser receives only that same-origin route and never the private origin. Each image, thumbnail, draft or range request rechecks the central session and selected business, then verifies exact stored-path ownership in Echo's message/draft tables before streaming. Keep EchoMedia on a private network without a public proxy. Responses are private and uncached; active content downloads as an attachment.
 
-This setting is required. The former public-media fallback and its `MEDIA_BASE_URL` setting are gone, so an unset internal origin now fails at startup rather than quietly serving attachments from an unauthenticated public host.
+The former public-media fallback and its `MEDIA_BASE_URL` setting are gone, so an origin explicitly blanked now fails at startup rather than quietly serving attachments from an unauthenticated public host.
 
 ## Shared tenant numbers and SSO
 
