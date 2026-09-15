@@ -1,3 +1,4 @@
+import { buildInfo } from './buildInfo';
 import express from 'express';
 import http from 'http';
 import https from 'https';
@@ -168,7 +169,7 @@ export function buildApp() {
   // Settings-free, so it answers while the store is down: "the process is
   // up" stays distinguishable from "the process cannot read its settings".
   app.get('/healthz', (_req, res) =>
-    res.json({ ok: true, service: 'EchoWeb' }),
+    res.json({ ok: true, service: 'EchoWeb', ...buildInfo }),
   );
 
   /**
