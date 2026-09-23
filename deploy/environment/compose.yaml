@@ -1,0 +1,12 @@
+# Copy this directory beside sibling EchoWeb/EchoService/EchoMedia/EchoDatabase checkouts.
+name: echo
+include:
+  - path:
+      - ../EchoWeb/compose.yaml
+      - web.dependencies.yaml
+  - path:
+      - ../EchoService/compose.yaml
+      - ../EchoService/compose.proxy.yaml
+      - service.dependencies.yaml
+  - ../EchoMedia/compose.yaml
+  - ../EchoDatabase/compose.yaml

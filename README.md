@@ -4,7 +4,7 @@ Echo's messaging browser and backend-for-frontend. Identity owns users, business
 
 ## Development and configuration
 
-Use Node 22: `npm ci`, then `npm run dev`. EchoWeb does not load `.env` itself; export its values or pass them through Docker Compose. Copy `.env.example` and configure the Echo database and NocoDB bootstrap credentials. Database coordinates remain explicit process settings in this foundation release; moving those into the initial NocoDB bootstrap is a separate deployment change.
+Use Node 22: `npm ci`, then `npm run dev`. EchoWeb does not load `.env` itself; export its values or pass them through Docker Compose. Copy `.env.example` for the NocoDB bootstrap credentials; configure Echo database coordinates in PlatformConfig.
 
 The only runtime settings source is `PlatformConfig/cfg_tbl_Setting` through NocoDB. Resolution is exact `echo-web`, declared parent `echo`, then global `*`, with URL defaults derived from `PARENT_DOMAIN`. Blank seeded rows are unset; duplicate bases, tables and scoped keys fail. Runtime reads never create configuration. Settings and resolved IDs refresh every 30 seconds; failures return 503. `/healthz` remains configuration independent. Coordinate changes require restart.
 
@@ -15,6 +15,47 @@ Addresses of sibling containers are not settings. `ECHO_SERVICE_BASE_URL` and `M
 Provide service-owned `NOCODB_BASE_URL` and `NOCODB_API_TOKEN` directly in the
 deployment environment. The legacy SQL/IdentityBase readers, settings-mode
 switch and optional Identity bootstrap-file reader have been removed.
+
+## Deployment ownership
+
+Environments include this repository's `compose.yaml`; `docker-compose.yml`
+is a standalone development example. The includable file joins existing
+`ECHO_NETWORK` and `ECHO_PROXY_NETWORK` networks and publishes no host port.
+NPM forwards `echo.X.TLD` to `echo-web:3160`; see
+[`deploy/nginx/echo.X.TLD.conf`](deploy/nginx/echo.X.TLD.conf). Public Identity
+calls use `https://identity.X.TLD`. EchoService and EchoMedia use private names.
+
+Copy [`deploy/environment`](deploy/environment) beside sibling checkouts of
+EchoWeb, EchoService, EchoMedia and EchoDatabase, then fill its `.env` from the
+example. It includes each repo's deployment and gates the applications on
+EchoDatabase's migration/account jobs. Existing data volumes stay external.
+`NOCODB_BASE_URL` is shared; each application receives its own prefixed NocoDB
+token. Supply `ECHO_WEB_REVISION/EPOCH/DIRTY`, `ECHO_SERVICE_REVISION/EPOCH/DIRTY`
+and `ECHO_MEDIA_REVISION/EPOCH/DIRTY` from the matching checkout. The single-repo
+`BUILD_*` fallback must not be reused across an included multi-repo build.
+
+`DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and secret `DB_PASSWORD` resolve from
+PlatformConfig (`*` < `echo` < `echo-web`); same-named environment variables are
+ignored. Without DB_HOST the app derives `lsdb.<PARENT_DOMAIN>`; DB_PORT defaults
+to 3306. Use the separate read-only `echo_web` account, with its credentials in
+`echo-web` scope. Set DB_NAME explicitly. The pool opens on first use and retains
+its coordinates until restart. `/readyz` returns 503 with `database_unconfigured`
+for missing/invalid coordinates and `database_unreachable` for connection/query
+failure. `/healthz` stays independent. EchoDatabase's operator jobs take admin
+credentials separately; never put the MySQL admin password in PlatformConfig.
+
+## Public and private APIs
+
+`https://echo.X.TLD/api/...` is EchoWeb's browser API. It validates the central
+Identity session, tenant/number authorization and same-origin mutations before
+forwarding messaging requests to EchoService's private, unversioned `/api`.
+Carrier administration additionally requires SUPER_ADMIN. EchoWeb injects the
+authorized business number rather than trusting the browser to choose one.
+EchoService's API has no browser session boundary: `trustedCIDR` restricts who
+can call it, so it must stay private. Carrier ingress alone uses
+`https://webhook.echo.X.TLD/v1/{bandwidth,tychron}/...` and webhook authentication.
+EchoMedia has no public hostname; `/media/...` here checks session and ownership
+before streaming from the private media origin.
 
 ## Central-session cutover
 
@@ -51,7 +92,7 @@ nine retired tables disappear, messaging and ledger rows remain, and current
 Identity session authorization works without local auth/mapping tables. Live
 carrier and browser acceptance remain deployment checks.
 
-`IDENTITY_BASE_URL` is the server API origin (for example, `http://identity-preview:3200`). Set optional `IDENTITY_PUBLIC_BASE_URL` to the browser-facing HTTPS origin when Docker DNS differs from public DNS; it defaults to `IDENTITY_BASE_URL`. Token exchange, session checks and tenant selection always use the internal API origin.
+`IDENTITY_BASE_URL` is the public Identity API origin (normally `https://identity.X.TLD`). Server calls use that public name through the deployment proxy. `IDENTITY_PUBLIC_BASE_URL` defaults to it and can explicitly name a different browser origin in PlatformConfig.
 
 `MEDIA_INTERNAL_BASE_URL` is the private EchoMedia origin, defaulting to `http://echo-media:8082` and overridable where the service name differs (for example, `http://echo-media-preview:8082`). Attachments are served through `/media/<stored-path>`; the browser receives only that same-origin route and never the private origin. Each image, thumbnail, draft or range request rechecks the central session and selected business, then verifies exact stored-path ownership in Echo's message/draft tables before streaming. Keep EchoMedia on a private network without a public proxy. Responses are private and uncached; active content downloads as an attachment.
 
@@ -77,7 +118,7 @@ Validate service-owned PlatformConfig credentials, central sign-in, tenant/numbe
 selection, SMS/MMS, settings refresh/failure/recovery, and private authenticated
 media access. Use `MEDIA_INTERNAL_BASE_URL`, reject cross-tenant paths, and remove
 public upstream access to raw EchoMedia. Record actual deployed versions and
-results in [EchoOrchestrator #11](https://github.com/localsplash/EchoOrchestrator/issues/11).
+results in the deployment PR or issue in this repository.
 A code merge alone is not deployment evidence.
 
 PBX extensions, queues, queue membership and operational state belong to

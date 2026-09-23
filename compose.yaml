@@ -1,0 +1,38 @@
+# Include from the deployment's Compose file. Settings come from PlatformConfig.
+services:
+  echo-web:
+    build:
+      context: .
+      args:
+        BUILD_REVISION: ${ECHO_WEB_REVISION:-${BUILD_REVISION-}}
+        SOURCE_DATE_EPOCH: ${ECHO_WEB_EPOCH:-${SOURCE_DATE_EPOCH-0}}
+        BUILD_DIRTY: ${ECHO_WEB_DIRTY:-${BUILD_DIRTY-true}}
+      labels:
+        org.opencontainers.image.revision: ${ECHO_WEB_REVISION:-${BUILD_REVISION-}}
+        org.opencontainers.image.source: https://github.com/localsplash/EchoWeb
+    image: echo-web:${ECHO_WEB_TAG:-dev}
+    container_name: ${ECHO_WEB_CONTAINER_NAME:-echo-web}
+    environment:
+      TZ: ${TZ:-America/Los_Angeles}
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: "3160"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      NOCODB_BASE_URL: ${NOCODB_BASE_URL:?the PlatformConfig NocoDB URL}
+      NOCODB_API_TOKEN: ${ECHO_WEB_NOCODB_API_TOKEN:?this service's own NocoDB token}
+      ECHO_SERVICE_BASE_URL: ${ECHO_SERVICE_BASE_URL:-http://echo-service:8080}
+      MEDIA_INTERNAL_BASE_URL: ${MEDIA_INTERNAL_BASE_URL:-http://echo-media:8082}
+    networks: [web-private, web-proxy]
+    logging:
+      driver: json-file
+      options:
+        max-size: ${LOG_MAX_SIZE:-10m}
+        max-file: ${LOG_MAX_FILE:-"3"}
+    restart: unless-stopped
+
+networks:
+  web-private:
+    name: ${ECHO_NETWORK:?the private Echo network}
+    external: true
+  web-proxy:
+    name: ${ECHO_PROXY_NETWORK:-npm_network}
+    external: true

@@ -7,7 +7,7 @@ import pinoHttp from 'pino-http';
 import pino from 'pino';
 import { loadConfig, loadEnv, ensureFreshConfig } from './config';
 import { SettingsUnavailableError } from './settings';
-import { getDb } from './db';
+import { getDb, DatabaseNotConfiguredError } from './db';
 import { registerMediaRoute } from './media';
 import {
   getSessionIdFromRequest,
@@ -41,7 +41,7 @@ async function resolveSession(
   const token = getSessionIdFromRequest(req);
   if (!token) return null;
   return resolvePlatformSession(
-    getDb(loadEnv()),
+    getDb(),
     loadConfig(),
     token,
     readBusinessCookie(req),
@@ -138,7 +138,7 @@ function setBusinessCookie(res: express.Response, number: number | null): void {
 
 export function buildApp() {
   const env = loadEnv();
-  const db = getDb(env);
+  const db = getDb();
   const logger = pino({
     level: env.LOG_LEVEL,
     redact: [
@@ -198,10 +198,12 @@ export function buildApp() {
         'SELECT 1',
       );
       res.json({ ok: true });
-    } catch {
+    } catch (error) {
       res
         .status(503)
-        .json({ error: 'Echo platform mapping schema is unavailable' });
+        .json(error instanceof DatabaseNotConfiguredError
+          ? { error: error.message, reason: 'database_unconfigured' }
+          : { error: 'Echo database is unavailable', reason: 'database_unreachable' });
     }
   });
   registerMediaRoute(app, db, loadConfig, resolveSession);

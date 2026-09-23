@@ -7,20 +7,12 @@ import {
 } from './settings';
 
 /** Runtime config: PlatformConfig scopes echo-web -> echo -> * are the only
- * source for business settings. DB coordinates remain process bootstrap;
+ * source for application settings, including DB coordinates;
  * pools require restart to change. No SQL/IdentityBase settings readers remain. */
 const envSchema = z.object({
   NODE_ENV: z.string().default('development'),
   PORT: z.coerce.number().default(3160),
   LOG_LEVEL: z.string().default('info'),
-
-  // Echo application database pool coordinates remain deployment bootstrap.
-  // Runtime settings use the selected PlatformConfig/legacy reader below.
-  DB_HOST: z.string().default(''),
-  DB_PORT: z.coerce.number().default(3306),
-  DB_USER: z.string().default(''),
-  DB_PASSWORD: z.string().default(''),
-  DB_NAME: z.string().default(''),
 
   // Service-owned NocoDB bootstrap, provided directly by the deployment.
   NOCODB_BASE_URL: z.string().default(''),
@@ -45,6 +37,7 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): EnvConfig {
  * environment variable is ignored: two homes for one value meant a row could be
  * edited with no effect and nothing on the host to say why. */
 export const SETTING_KEYS = [
+  'DB_HOST', 'DB_PORT', 'DB_USER', 'DB_PASSWORD', 'DB_NAME',
   'PARENT_DOMAIN',
   'IDENTITY_BASE_URL',
   'IDENTITY_PUBLIC_BASE_URL',
@@ -61,6 +54,11 @@ export const SETTING_KEYS = [
 type SettingKey = (typeof SETTING_KEYS)[number];
 
 export interface AppConfig extends EnvConfig {
+  DB_HOST: string;
+  DB_PORT: number;
+  DB_USER: string;
+  DB_PASSWORD: string;
+  DB_NAME: string;
   APP_BASE_URL: string;
   UISP_PLUGIN_URL: string;
   PUSHER_KEY: string;
@@ -91,6 +89,11 @@ function assemble(env: EnvConfig, settings: Settings): AppConfig {
     value(key) || hostUnder(parent, label);
   return {
     ...env,
+    DB_HOST: value('DB_HOST') || (parent ? `lsdb.${parent}` : ''),
+    DB_PORT: Number(value('DB_PORT') || 3306),
+    DB_USER: value('DB_USER'),
+    DB_PASSWORD: value('DB_PASSWORD'),
+    DB_NAME: value('DB_NAME'),
     APP_BASE_URL: derived('APP_BASE_URL', 'echo'),
     UISP_PLUGIN_URL: value('UISP_PLUGIN_URL'),
     PUSHER_KEY: value('PUSHER_KEY'),
