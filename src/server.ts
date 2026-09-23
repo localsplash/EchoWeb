@@ -1,7 +1,6 @@
 import './timezone';
 import { buildApp } from './app';
 import { loadEnv, refreshConfig } from './config';
-import { getDb } from './db';
 
 const RETRY_DELAY_MS = 5_000;
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -9,7 +8,6 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 /** Require PlatformConfig at startup; retry once, then exit on failure. */
 async function main() {
   const env = loadEnv();
-  getDb(env); // Validate application database bootstrap.
 
   for (let attempt = 1; ; attempt++) {
     try {
