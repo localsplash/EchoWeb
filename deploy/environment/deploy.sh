@@ -32,7 +32,7 @@ if [ $# -gt 0 ]; then
   job_exit=$(docker wait "$job_id")
   docker logs "$job_id"
   if [ "$job_exit" != 0 ]; then
-    echo "ERROR: EchoDatabase account job exited $job_exit" >&2
+    echo "ERROR: echo_db account job exited $job_exit" >&2
     exit 1
   fi
   docker compose up -d --build --no-deps "$@"

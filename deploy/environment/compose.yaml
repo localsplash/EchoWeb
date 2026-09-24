@@ -1,6 +1,7 @@
-# An Echo environment: this folder holds the four checkouts (EchoWeb,
-# EchoService, EchoMedia, EchoDatabase) and wires them together. Service
-# definitions belong to each repository; only host wiring lives here.
+# An Echo environment: this folder holds the three checkouts (EchoWeb,
+# EchoService, EchoMedia) and wires them together with the echo_db jobs from
+# the AidaPlatformDB checkout beside it. Service definitions belong to each
+# repository; only host wiring lives here.
 name: echo
 include:
   - path:
@@ -11,4 +12,4 @@ include:
       - EchoService/compose.proxy.yaml
       - service.host.yaml
   - EchoMedia/compose.yaml
-  - EchoDatabase/compose.yaml
+  - ../AidaPlatformDB/echo/compose.yaml
