@@ -1,6 +1,6 @@
 # EchoWeb
 
-Echo's messaging browser and backend-for-frontend. Identity owns users, businesses, memberships and browser sessions; EchoService owns messaging operations; EchoDatabase owns messaging and media records. This app reads messaging/media ownership from MySQL and sends messaging operations through `ECHO_SERVICE_BASE_URL`.
+Echo's messaging browser and backend-for-frontend. Identity owns users, businesses, memberships and browser sessions; EchoService owns messaging operations; the echo_db schema (AidaPlatformDB/echo) owns messaging and media records. This app reads messaging/media ownership from MySQL and sends messaging operations through `ECHO_SERVICE_BASE_URL`.
 
 ## Development and configuration
 
@@ -26,13 +26,15 @@ NPM forwards `echo.X.TLD` to `echo-web:3160`; see
 calls use `https://identity.X.TLD`. EchoService and EchoMedia use private names.
 
 An environment is a copy of [`deploy/environment`](deploy/environment) with
-the four checkouts (EchoWeb, EchoService, EchoMedia, EchoDatabase) cloned inside
-it and `.env` filled from the example — on the dev host that folder is
-`/opt/local/echo`. Its `compose.yaml` includes each repo's deployment and gates
-the applications on EchoDatabase's migration/account jobs; existing data
+the three checkouts (EchoWeb, EchoService, EchoMedia) cloned inside it, an
+[AidaPlatformDB](https://github.com/localsplash/AidaPlatformDB) checkout beside
+it, and `.env` filled from the example — on the dev host that folder is
+`/opt/local/echo`; `AidaPlatformDB/install.sh apps` lays it out. Its
+`compose.yaml` includes each repo's deployment and gates the applications on
+the echo_db migration/account jobs from `AidaPlatformDB/echo`; existing data
 volumes stay external. `.env` holds only bootstrap and Docker wiring: the shared
 `NOCODB_BASE_URL`, one prefixed NocoDB token per application, and the MySQL
-account passwords EchoDatabase's jobs create. `deploy.sh` stamps each image
+account passwords those jobs create. `deploy.sh` stamps each image
 with its own checkout's commit (`ECHO_WEB_REVISION/EPOCH/DIRTY` and so on); the
 single-repo `BUILD_*` fallback must not be reused across an included
 multi-repo build.
@@ -44,7 +46,7 @@ to 3306. Use the separate read-only `echo_web` account, with its credentials in
 `echo-web` scope. Set DB_NAME explicitly. The pool opens on first use and retains
 its coordinates until restart. `/readyz` returns 503 with `database_unconfigured`
 for missing/invalid coordinates and `database_unreachable` for connection/query
-failure. `/healthz` stays independent. EchoDatabase's operator jobs take admin
+failure. `/healthz` stays independent. AidaPlatformDB/echo's operator jobs take admin
 credentials separately; never put the MySQL admin password in PlatformConfig.
 
 ## Public and private APIs
@@ -65,7 +67,7 @@ before streaming from the private media origin.
 Identity owns users, tenants, memberships, central sessions and tenant-number
 assignments. Echo no longer needs local auth/provenance tables or a mapping
 import before accepting a central session. The disposable Dev cleanup removes
-those obsolete tables with EchoDatabase migration 013 while retaining active
+those obsolete tables with AidaPlatformDB/echo migration 013 while retaining active
 messaging/media records.
 
 The browser exchanges a state-bound Identity code and receives an opaque central application token in `__Host-echo_platform_session` (Secure, HttpOnly, SameSite=Lax). The old `echo_session` cookie is ignored and cleared during the new login/logout; existing users authenticate through the preserved central SSO account. An unsolicited UISP/Identity entry starts a state-bound handoff before redemption. Sign-in methods and account management redirect to Identity.
@@ -78,11 +80,11 @@ Number reassignment is unsupported until historical message/media ownership is i
 
 ## Validation
 
-`docker build --target test -t echo-web-platform:test .` runs typecheck/build plus the cookie, handoff, tenant/proxy authorization and scoped-settings tests. The integration suite needs disposable MySQL and a read-only EchoDatabase checkout mounted beneath `/app/schema`:
+`docker build --target test -t echo-web-platform:test .` runs typecheck/build plus the cookie, handoff, tenant/proxy authorization and scoped-settings tests. The integration suite needs disposable MySQL and the read-only `echo/` folder of an AidaPlatformDB checkout mounted beneath `/app/schema`:
 
 ```sh
 docker run --rm --network platform-test \
-  --mount type=bind,src=/absolute/EchoDatabase,dst=/app/schema,readonly \
+  --mount type=bind,src=/absolute/AidaPlatformDB/echo,dst=/app/schema,readonly \
   -e ECHO_DATABASE_SOURCE=/app/schema \
   -e TEST_DB_URL=mysql://root:test-password@mysql:3306/echo_platform_test \
   echo-web-platform:test npm test -- src/platform.integration.test.ts
@@ -103,7 +105,7 @@ The former public-media fallback and its `MEDIA_BASE_URL` setting are gone, so a
 
 ## Shared tenant numbers and SSO
 
-Deploy Identity migration `0005_shared_phone_numbers` first and backfill reviewed tenant-number assignments. Echo now requires the `numbers` field in central session introspection and does not query `echo_tbl_PlatformOrgMap` to authorize users. The obsolete mapping tables and importer are removed. Active message/media IDs and data stay in EchoDatabase.
+Deploy Identity migration `0005_shared_phone_numbers` first and backfill reviewed tenant-number assignments. Echo now requires the `numbers` field in central session introspection and does not query `echo_tbl_PlatformOrgMap` to authorize users. The obsolete mapping tables and importer are removed. Active message/media IDs and data stay in echo_db.
 
 Manage numbers and memberships together in AidaAdmin. Every enabled tenant member (including USER) inherits the explicit `TENANT_MEMBERS` number policy. A member can sign in without numbers and receives a message to contact their Tenant Admin. Multiple numbers are supported; selection remains tenant-scoped and revalidated on every request. `iOrgId` in `/api/me` is now nullable metadata.
 
@@ -114,7 +116,7 @@ Opening Echo automatically starts the state-bound Identity handoff. An existing 
 This Dev deployment intentionally discards obsolete settings, local authentication
 and provenance objects. There is no legacy settings mode, rollback copy or
 preservation window. Deploy the matching EchoWeb/EchoService revisions and then
-apply EchoDatabase `013_retire_legacy_configuration_and_auth.sql`. Fresh schema
+apply AidaPlatformDB/echo `013_retire_legacy_configuration_and_auth.sql`. Fresh schema
 initialization no longer creates the retired tables.
 
 Validate service-owned PlatformConfig credentials, central sign-in, tenant/number
