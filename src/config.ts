@@ -23,7 +23,7 @@ const envSchema = z.object({
   // belong — not a settings row that can drift from the file that defines
   // them. The defaults are the standard stack; override only where the
   // service names differ, as in a preview environment.
-  ECHO_SERVICE_BASE_URL: z.string().default('http://echo-service:8080'),
+  ECHO_SERVICE_BASE_URL: z.string().default('http://echo-service-private:8080'),
   MEDIA_INTERNAL_BASE_URL: z.string().default('http://echo-media:8082'),
 });
 

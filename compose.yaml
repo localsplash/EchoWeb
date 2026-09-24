@@ -19,7 +19,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       NOCODB_BASE_URL: ${NOCODB_BASE_URL:?the PlatformConfig NocoDB URL}
       NOCODB_API_TOKEN: ${ECHO_WEB_NOCODB_API_TOKEN:?this service's own NocoDB token}
-      ECHO_SERVICE_BASE_URL: ${ECHO_SERVICE_BASE_URL:-http://echo-service:8080}
+      ECHO_SERVICE_BASE_URL: ${ECHO_SERVICE_BASE_URL:-http://echo-service-private:8080}
       MEDIA_INTERNAL_BASE_URL: ${MEDIA_INTERNAL_BASE_URL:-http://echo-media:8082}
     networks: [web-private, web-proxy]
     logging:
