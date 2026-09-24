@@ -1,5 +1,0 @@
-services:
-  echo-web:
-    depends_on:
-      echo-db-users:
-        condition: service_completed_successfully
