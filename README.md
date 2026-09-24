@@ -10,7 +10,7 @@ The only runtime settings source is `PlatformConfig/cfg_tbl_Setting` through Noc
 
 Required application settings are `PARENT_DOMAIN` and, where service network trust needs it, `IDENTITY_CLIENT_SECRET`. Public defaults derive from the whitelabel domain: `https://echo.X.TLD` and `https://identity.X.TLD`. A row pins a URL explicitly where the derived default is wrong. EchoMedia has no public hostname: it is reached only through this app's authorized `/media` route. No provider OAuth credentials belong in EchoWeb.
 
-Addresses of sibling containers are not settings. `ECHO_SERVICE_BASE_URL` and `MEDIA_INTERNAL_BASE_URL` are process environment with defaults (`http://echo-service:8080`, `http://echo-media:8082`) matching the standard Compose stack, because Compose assigns those names and a settings row would only drift from the file that defines them. Override them where the service names differ, as in a preview environment.
+Addresses of sibling containers are not settings. `ECHO_SERVICE_BASE_URL` and `MEDIA_INTERNAL_BASE_URL` are process environment with defaults (`http://echo-service-private:8080`, `http://echo-media:8082`) matching the standard Compose stack. EchoService registers `echo-service-private` only on the private network. Use that name for internal calls: when both services also join the proxy network, the ordinary `echo-service` name can resolve to the proxy address and trigger a network-policy rejection. Override the addresses where the network names differ, as in a preview environment.
 
 Provide service-owned `NOCODB_BASE_URL` and `NOCODB_API_TOKEN` directly in the
 deployment environment. The legacy SQL/IdentityBase readers, settings-mode
