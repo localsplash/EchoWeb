@@ -1,12 +1,14 @@
-# Copy this directory beside sibling EchoWeb/EchoService/EchoMedia/EchoDatabase checkouts.
+# An Echo environment: this folder holds the four checkouts (EchoWeb,
+# EchoService, EchoMedia, EchoDatabase) and wires them together. Service
+# definitions belong to each repository; only host wiring lives here.
 name: echo
 include:
   - path:
-      - ../EchoWeb/compose.yaml
-      - web.dependencies.yaml
+      - EchoWeb/compose.yaml
+      - web.host.yaml
   - path:
-      - ../EchoService/compose.yaml
-      - ../EchoService/compose.proxy.yaml
-      - service.dependencies.yaml
-  - ../EchoMedia/compose.yaml
-  - ../EchoDatabase/compose.yaml
+      - EchoService/compose.yaml
+      - EchoService/compose.proxy.yaml
+      - service.host.yaml
+  - EchoMedia/compose.yaml
+  - EchoDatabase/compose.yaml

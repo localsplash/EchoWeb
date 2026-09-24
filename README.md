@@ -25,14 +25,17 @@ NPM forwards `echo.X.TLD` to `echo-web:3160`; see
 [`deploy/nginx/echo.X.TLD.conf`](deploy/nginx/echo.X.TLD.conf). Public Identity
 calls use `https://identity.X.TLD`. EchoService and EchoMedia use private names.
 
-Copy [`deploy/environment`](deploy/environment) beside sibling checkouts of
-EchoWeb, EchoService, EchoMedia and EchoDatabase, then fill its `.env` from the
-example. It includes each repo's deployment and gates the applications on
-EchoDatabase's migration/account jobs. Existing data volumes stay external.
-`NOCODB_BASE_URL` is shared; each application receives its own prefixed NocoDB
-token. Supply `ECHO_WEB_REVISION/EPOCH/DIRTY`, `ECHO_SERVICE_REVISION/EPOCH/DIRTY`
-and `ECHO_MEDIA_REVISION/EPOCH/DIRTY` from the matching checkout. The single-repo
-`BUILD_*` fallback must not be reused across an included multi-repo build.
+An environment is a copy of [`deploy/environment`](deploy/environment) with
+the four checkouts (EchoWeb, EchoService, EchoMedia, EchoDatabase) cloned inside
+it and `.env` filled from the example — on the dev host that folder is
+`/opt/local/echo`. Its `compose.yaml` includes each repo's deployment and gates
+the applications on EchoDatabase's migration/account jobs; existing data
+volumes stay external. `.env` holds only bootstrap and Docker wiring: the shared
+`NOCODB_BASE_URL`, one prefixed NocoDB token per application, and the MySQL
+account passwords EchoDatabase's jobs create. `deploy.sh` stamps each image
+with its own checkout's commit (`ECHO_WEB_REVISION/EPOCH/DIRTY` and so on); the
+single-repo `BUILD_*` fallback must not be reused across an included
+multi-repo build.
 
 `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and secret `DB_PASSWORD` resolve from
 PlatformConfig (`*` < `echo` < `echo-web`); same-named environment variables are
