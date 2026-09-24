@@ -53,7 +53,7 @@ Carrier administration additionally requires SUPER_ADMIN. EchoWeb injects the
 authorized business number rather than trusting the browser to choose one.
 EchoService's API has no browser session boundary: `trustedCIDR` restricts who
 can call it, so it must stay private. Carrier ingress alone uses
-`https://webhook.echo.X.TLD/v1/{bandwidth,tychron}/...` and webhook authentication.
+`https://echo-webhook.X.TLD/v1/{bandwidth,tychron}/...` and webhook authentication.
 EchoMedia has no public hostname; `/media/...` here checks session and ownership
 before streaming from the private media origin.
 
