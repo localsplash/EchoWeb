@@ -1,5 +1,6 @@
 # Host wiring for echo-web: a loopback port for deploy.sh's health check, and
 # start order. Service definitions stay in EchoWeb/compose.yaml.
+services:
   echo-web:
     ports:
       - 127.0.0.1:18160:3160
