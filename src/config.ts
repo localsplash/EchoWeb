@@ -1,37 +1,30 @@
 import { z } from 'zod';
-import mysql from 'mysql2/promise';
 import {
   CACHE_TTL_MS,
-  IdentitySettingsStore,
+  PlatformSettingsStore,
   Settings,
   SettingsUnavailableError,
-  readEchoSettings,
 } from './settings';
 
-/** Runtime config: PlatformConfig scopes echo-web -> echo -> *, overridden
- * by nonblank environment settings. SETTINGS_MODE=legacy explicitly selects the
- * old Echo SQL and IdentityBase readers during rollout. DB coordinates remain
- * process bootstrap in this bounded release; pools require restart to change. */
+/** Runtime config: PlatformConfig scopes echo-web -> echo -> * are the only
+ * source for application settings, including DB coordinates;
+ * pools require restart to change. No SQL/IdentityBase settings readers remain. */
 const envSchema = z.object({
   NODE_ENV: z.string().default('development'),
   PORT: z.coerce.number().default(3160),
   LOG_LEVEL: z.string().default('info'),
-  SETTINGS_MODE: z.enum(['platform', 'legacy']).default('platform'),
 
-  // The Echo database. Its coordinates are the one thing that has to be
-  // stated outside it — everything else about this app lives in
-  // echo_tbl_Settings.
-  DB_HOST: z.string().default(''),
-  DB_PORT: z.coerce.number().default(3306),
-  DB_USER: z.string().default(''),
-  DB_PASSWORD: z.string().default(''),
-  DB_NAME: z.string().default(''),
-
-  // Where to read PARENT_DOMAIN and IDENTITY_CLIENT_SECRET from. On a
-  // single-host install these arrive in identity's own bootstrap file,
-  // mounted read-only at /data — see localConfig.ts.
+  // Service-owned NocoDB bootstrap, provided directly by the deployment.
   NOCODB_BASE_URL: z.string().default(''),
   NOCODB_API_TOKEN: z.string().default(''),
+
+  // Container topology: which address on the internal network answers for a
+  // sibling service. Compose assigns these names, so compose is where they
+  // belong — not a settings row that can drift from the file that defines
+  // them. The defaults are the standard stack; override only where the
+  // service names differ, as in a preview environment.
+  ECHO_SERVICE_BASE_URL: z.string().default('http://echo-service-private:8080'),
+  MEDIA_INTERNAL_BASE_URL: z.string().default('http://echo-media:8082'),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
@@ -40,15 +33,15 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): EnvConfig {
   return envSchema.parse(env);
 }
 
-/** The keys this app reads out of `echo_tbl_Settings`. */
+/** Runtime setting keys, read only from cfg_tbl_Setting. A same-named
+ * environment variable is ignored: two homes for one value meant a row could be
+ * edited with no effect and nothing on the host to say why. */
 export const SETTING_KEYS = [
+  'DB_HOST', 'DB_PORT', 'DB_USER', 'DB_PASSWORD', 'DB_NAME',
   'PARENT_DOMAIN',
   'IDENTITY_BASE_URL',
   'IDENTITY_PUBLIC_BASE_URL',
   'IDENTITY_CLIENT_SECRET',
-  'ECHO_SERVICE_BASE_URL',
-  'MEDIA_BASE_URL',
-  'MEDIA_INTERNAL_BASE_URL',
   'APP_BASE_URL',
   'UISP_PLUGIN_URL',
   // Only the two public halves — the app id and the secret belong to
@@ -58,16 +51,19 @@ export const SETTING_KEYS = [
   'PUSHER_CLUSTER',
 ] as const;
 
+type SettingKey = (typeof SETTING_KEYS)[number];
+
 export interface AppConfig extends EnvConfig {
-  ECHO_SERVICE_BASE_URL: string;
-  MEDIA_BASE_URL: string;
-  /** Private EchoMedia origin. When set, browsers use the authenticated proxy. */
-  MEDIA_INTERNAL_BASE_URL?: string;
+  DB_HOST: string;
+  DB_PORT: number;
+  DB_USER: string;
+  DB_PASSWORD: string;
+  DB_NAME: string;
   APP_BASE_URL: string;
   UISP_PLUGIN_URL: string;
   PUSHER_KEY: string;
   PUSHER_CLUSTER: string;
-  /** From IdentityBase — the platform's, not this app's. */
+  /** Shared platform domain from the selected settings source. */
   PARENT_DOMAIN: string;
   IDENTITY_CLIENT_SECRET: string;
   /** Derived from PARENT_DOMAIN unless a row pins it. */
@@ -76,22 +72,7 @@ export interface AppConfig extends EnvConfig {
   IDENTITY_PUBLIC_BASE_URL?: string;
 }
 
-/**
- * Any settings key may be pinned in the environment, where it wins over the
- * row — an override for deployments that manage configuration as
- * environment, not a default. Blank counts as unset.
- */
-function overridesFromEnv(env: NodeJS.ProcessEnv = process.env): Settings {
-  const overrides: Settings = {};
-  for (const key of SETTING_KEYS) {
-    const raw = env[key];
-    if (typeof raw === 'string' && raw.trim() !== '')
-      overrides[key] = raw.trim();
-  }
-  return overrides;
-}
-
-let identityStore: IdentitySettingsStore | null = null;
+let platformStore: PlatformSettingsStore | null = null;
 let snapshot: { at: number; config: AppConfig } | null = null;
 
 /** `https://<label>.<parent>`, or '' when the platform domain is unknown. */
@@ -99,29 +80,26 @@ function hostUnder(parent: string, label: string): string {
   return parent ? `https://${label}.${parent}` : '';
 }
 
-function assemble(
-  env: EnvConfig,
-  settings: Settings,
-  identity: Settings,
-): AppConfig {
-  const value = (key: string): string => settings[key] ?? '';
-  const parent = identity.PARENT_DOMAIN ?? '';
+function assemble(env: EnvConfig, settings: Settings): AppConfig {
+  const value = (key: SettingKey): string => settings[key] ?? '';
+  const parent = value('PARENT_DOMAIN');
   // A row wins over the derived value; blank means derive. The naming scheme
   // is the platform's, so it lives here rather than in twelve rows.
-  const derived = (key: string, label: string): string =>
+  const derived = (key: SettingKey, label: string): string =>
     value(key) || hostUnder(parent, label);
   return {
     ...env,
-    // Internal, container-to-container: not a public hostname and not derived.
-    ECHO_SERVICE_BASE_URL: value('ECHO_SERVICE_BASE_URL'),
-    MEDIA_BASE_URL: derived('MEDIA_BASE_URL', 'media-echo'),
-    MEDIA_INTERNAL_BASE_URL: value('MEDIA_INTERNAL_BASE_URL'),
+    DB_HOST: value('DB_HOST') || (parent ? `lsdb.${parent}` : ''),
+    DB_PORT: Number(value('DB_PORT') || 3306),
+    DB_USER: value('DB_USER'),
+    DB_PASSWORD: value('DB_PASSWORD'),
+    DB_NAME: value('DB_NAME'),
     APP_BASE_URL: derived('APP_BASE_URL', 'echo'),
     UISP_PLUGIN_URL: value('UISP_PLUGIN_URL'),
     PUSHER_KEY: value('PUSHER_KEY'),
     PUSHER_CLUSTER: value('PUSHER_CLUSTER'),
     PARENT_DOMAIN: parent,
-    IDENTITY_CLIENT_SECRET: identity.IDENTITY_CLIENT_SECRET ?? '',
+    IDENTITY_CLIENT_SECRET: value('IDENTITY_CLIENT_SECRET'),
     IDENTITY_BASE_URL:
       value('IDENTITY_BASE_URL') || hostUnder(parent, 'identity'),
     IDENTITY_PUBLIC_BASE_URL:
@@ -132,21 +110,17 @@ function assemble(
 }
 
 /** Read the settings and replace the snapshot. Throws if they cannot be read. */
-export async function refreshConfig(db: mysql.Pool): Promise<AppConfig> {
+export async function refreshConfig(): Promise<AppConfig> {
   const env = loadEnv();
-  if (!identityStore) identityStore = new IdentitySettingsStore(env);
-  const identity = await identityStore.get();
-  const settings = {
-    ...(env.SETTINGS_MODE === 'legacy' ? await readEchoSettings(db) : {}),
-    ...identity,
-    ...overridesFromEnv(),
-  };
-  const config = assemble(env, settings, settings);
+  if (!platformStore) platformStore = new PlatformSettingsStore(env);
+  const settings = await platformStore.get();
+  const config = assemble(env, settings);
   for (const key of [
     'PARENT_DOMAIN',
     'ECHO_SERVICE_BASE_URL',
     'APP_BASE_URL',
     'IDENTITY_BASE_URL',
+    'MEDIA_INTERNAL_BASE_URL',
   ] as const) {
     if (!config[key])
       throw new SettingsUnavailableError(
@@ -182,12 +156,10 @@ export async function refreshConfig(db: mysql.Pool): Promise<AppConfig> {
 }
 
 /** Refresh only when the snapshot has aged out; used per request. */
-export async function ensureFreshConfig(
-  db: mysql.Pool,
-): Promise<AppConfig> {
+export async function ensureFreshConfig(): Promise<AppConfig> {
   if (snapshot && Date.now() - snapshot.at < CACHE_TTL_MS)
     return snapshot.config;
-  return refreshConfig(db);
+  return refreshConfig();
 }
 
 /**
@@ -208,7 +180,7 @@ export function loadConfig(): AppConfig {
 /** Drop the snapshot; the retry path. */
 export function invalidateConfig(): void {
   snapshot = null;
-  identityStore?.invalidate();
+  platformStore?.invalidate();
 }
 
 /** Test seam: install a snapshot without touching the database. */

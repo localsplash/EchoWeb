@@ -1,13 +1,5 @@
-import mysql from 'mysql2/promise';
-
-/** PlatformConfig is the normal source. Legacy SQL/IdentityBase readers are
- * retained only behind an explicit SETTINGS_MODE=legacy cutover switch. */
-
 /** Values are trusted for this long before the source is asked again. */
 export const CACHE_TTL_MS = 30_000;
-
-/** This application's `sApp` in `echo_tbl_Settings`. */
-export const APP_NAME = 'web';
 
 export type Settings = Record<string, string>;
 
@@ -21,55 +13,12 @@ export class SettingsUnavailableError extends Error {
   }
 }
 
-interface SettingRow extends mysql.RowDataPacket {
-  sApp: string;
-  sKey: string;
-  sValue: string | null;
-}
-
-/**
- * This app's settings: the general rows, then its own on top.
- *
- * An empty value is "not set" rather than an empty string, so a blank row
- * never shadows a real value — and a `'web'` row left blank does not blank
- * out the `'*'` row underneath it.
- */
-export async function readEchoSettings(
-  db: mysql.Pool,
-  app: string = APP_NAME,
-): Promise<Settings> {
-  const [rows] = await db.query<SettingRow[]>(
-    `SELECT sApp, sKey, sValue FROM echo_tbl_Settings
-      WHERE sApp IN ('*', ?)
-      ORDER BY sApp = ?`, // the app's own row sorts last, so it wins
-    [app, app],
-  );
-  const settings: Settings = {};
-  for (const row of rows) {
-    if (row.sValue != null && String(row.sValue).trim() !== '') {
-      settings[row.sKey] = String(row.sValue).trim();
-    }
-  }
-  return settings;
-}
-
-// Legacy names are used only by the explicit legacy mode, never as fallback.
-export const IDENTITY_BASE_NAME = 'IdentityBase';
-export const IDENTITY_TABLE_NAME = 'auth_tbl_Settings';
-
-/** The keys read from IdentityBase. Blank counts as unset, as everywhere. */
-export const IDENTITY_KEYS = [
-  'PARENT_DOMAIN',
-  'IDENTITY_CLIENT_SECRET',
-] as const;
-
 interface NocoConfig {
   NOCODB_BASE_URL: string;
   NOCODB_API_TOKEN: string;
-  SETTINGS_MODE?: 'platform' | 'legacy';
 }
 
-export class IdentitySettingsStore {
+export class PlatformSettingsStore {
   private ids: { at: number; tableId: string } | null = null;
   private cache: { at: number; values: Settings } | null = null;
 
@@ -96,9 +45,7 @@ export class IdentitySettingsStore {
     if (!this.config.NOCODB_BASE_URL || !this.config.NOCODB_API_TOKEN) {
       throw new SettingsUnavailableError(
         'unconfigured',
-        'NOCODB_BASE_URL and NOCODB_API_TOKEN must be set to read PARENT_DOMAIN from ' +
-          `${IDENTITY_BASE_NAME}. On a single-host install they come from identity's ` +
-          'config volume, mounted read-only at /data.',
+        'NOCODB_BASE_URL and NOCODB_API_TOKEN must be provided for PlatformConfig.',
       );
     }
     // Found by NAME at runtime, never by an ID from a config file: an ID
@@ -106,9 +53,8 @@ export class IdentitySettingsStore {
     const bases = await this.api<{
       list: Array<{ id: string; title: string }>;
     }>('/api/v2/meta/bases');
-    const legacy = this.config.SETTINGS_MODE === 'legacy';
-    const baseName = legacy ? IDENTITY_BASE_NAME : 'PlatformConfig';
-    const tableName = legacy ? IDENTITY_TABLE_NAME : 'cfg_tbl_Setting';
+    const baseName = 'PlatformConfig';
+    const tableName = 'cfg_tbl_Setting';
     const matches = bases.list.filter((b) => b.title === baseName);
     if (matches.length !== 1) {
       throw new SettingsUnavailableError(
@@ -140,8 +86,6 @@ export class IdentitySettingsStore {
         app?: string;
         settingKey?: string;
         settingValue?: string | null;
-        Key?: string;
-        Value?: string | null;
       }> = [];
       for (let offset = 0; ; offset += 200) {
         const page = await this.api<{
@@ -154,11 +98,7 @@ export class IdentitySettingsStore {
       const values: Settings = {};
       const seen = new Set<string>();
       for (const row of rows) {
-        const key = JSON.stringify(
-          this.config.SETTINGS_MODE === 'legacy'
-            ? ['legacy', row.Key]
-            : [row.app, row.settingKey],
-        );
+        const key = JSON.stringify([row.app, row.settingKey]);
         if (seen.has(key))
           throw new SettingsUnavailableError(
             'unreachable',
@@ -166,19 +106,11 @@ export class IdentitySettingsStore {
           );
         seen.add(key);
       }
-      if (this.config.SETTINGS_MODE === 'legacy') {
-        for (const key of IDENTITY_KEYS) {
-          const row = rows.find((r) => r.Key === key);
-          const value = row?.Value?.trim();
-          if (value) values[key] = value;
+      for (const scope of ['*', 'echo', 'echo-web'])
+        for (const row of rows.filter((r) => r.app === scope)) {
+          if (row.settingKey && row.settingValue?.trim())
+            values[row.settingKey] = row.settingValue.trim();
         }
-      } else {
-        for (const scope of ['*', 'echo', 'echo-web'])
-          for (const row of rows.filter((r) => r.app === scope)) {
-            if (row.settingKey && row.settingValue?.trim())
-              values[row.settingKey] = row.settingValue.trim();
-          }
-      }
       this.cache = { at: Date.now(), values };
       return values;
     } catch (err) {

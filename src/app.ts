@@ -1,3 +1,4 @@
+import { buildInfo } from './buildInfo';
 import express from 'express';
 import http from 'http';
 import https from 'https';
@@ -6,7 +7,7 @@ import pinoHttp from 'pino-http';
 import pino from 'pino';
 import { loadConfig, loadEnv, ensureFreshConfig } from './config';
 import { SettingsUnavailableError } from './settings';
-import { getDb } from './db';
+import { getDb, DatabaseNotConfiguredError } from './db';
 import { registerMediaRoute } from './media';
 import {
   getSessionIdFromRequest,
@@ -40,7 +41,7 @@ async function resolveSession(
   const token = getSessionIdFromRequest(req);
   if (!token) return null;
   return resolvePlatformSession(
-    getDb(loadEnv()),
+    getDb(),
     loadConfig(),
     token,
     readBusinessCookie(req),
@@ -137,7 +138,7 @@ function setBusinessCookie(res: express.Response, number: number | null): void {
 
 export function buildApp() {
   const env = loadEnv();
-  const db = getDb(env);
+  const db = getDb();
   const logger = pino({
     level: env.LOG_LEVEL,
     redact: [
@@ -168,7 +169,7 @@ export function buildApp() {
   // Settings-free, so it answers while the store is down: "the process is
   // up" stays distinguishable from "the process cannot read its settings".
   app.get('/healthz', (_req, res) =>
-    res.json({ ok: true, service: 'EchoWeb' }),
+    res.json({ ok: true, service: 'EchoWeb', ...buildInfo }),
   );
 
   /**
@@ -181,7 +182,7 @@ export function buildApp() {
    * unreachable / missing / ambiguous it was.
    */
   app.use((_req, _res, next) => {
-    ensureFreshConfig(db).then(() => next(), next);
+    ensureFreshConfig().then(() => next(), next);
   });
 
   app.use((req, res, next) => {
@@ -197,10 +198,12 @@ export function buildApp() {
         'SELECT 1',
       );
       res.json({ ok: true });
-    } catch {
+    } catch (error) {
       res
         .status(503)
-        .json({ error: 'Echo platform mapping schema is unavailable' });
+        .json(error instanceof DatabaseNotConfiguredError
+          ? { error: error.message, reason: 'database_unconfigured' }
+          : { error: 'Echo database is unavailable', reason: 'database_unreachable' });
     }
   });
   registerMediaRoute(app, db, loadConfig, resolveSession);
@@ -215,9 +218,10 @@ export function buildApp() {
     res.set('Cache-Control', 'public, max-age=300');
     res.send(
       `window.ECHO_CONFIG=${JSON.stringify({
-        MEDIA_BASE_URL: current.MEDIA_INTERNAL_BASE_URL
-          ? '/api/media'
-          : current.MEDIA_BASE_URL,
+        // The same-origin route, never the private origin behind it. A
+        // constant today, still emitted so the path can move without
+        // shipping new browser code.
+        MEDIA_BASE_URL: '/media',
         UISP_PLUGIN_URL: current.UISP_PLUGIN_URL,
         // The Pusher key and cluster are public by design — the client has to
         // present the key to connect. The app id and secret stay in

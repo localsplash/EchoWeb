@@ -14,7 +14,7 @@ const CARRIERS = [
 const CARRIER_FIELDS = {
   1: [ // Bandwidth
     { key: 'accountId',     label: 'Account ID' },
-    { key: 'apiToken',      label: 'API Token' },
+    { key: 'apiToken',      label: 'API Token',       password: true },
     { key: 'apiSecret',     label: 'API Secret',      password: true },
     { key: 'applicationId', label: 'Application ID' },
   ],
@@ -27,20 +27,19 @@ const CARRIER_FIELDS = {
   // application id, and no per-request callback URL (inbound and DLR endpoints
   // live on the number's Switch in the Atlas portal).
   //
-  // Complete URLs rather than a base plus a path, deliberately: Tychron's own
-  // documentation is inconsistent about the MMS path (/api/v1/mms in the
-  // endpoint section, /mms in the request example), so a wrong value should be
-  // a settings edit rather than a redeploy.
+  // Messaging endpoints come from EchoService's PlatformConfig settings.
+  // Optional staging overrides are kept under Advanced.
   8: [ // Tychron
     { key: 'apiToken', label: 'API Token', password: true },
-    { key: 'smsUrl',   label: 'SMS URL', placeholder: 'https://sms.tychron.online/sms' },
-    { key: 'mmsUrl',   label: 'MMS URL', placeholder: 'https://mms.tychron.online/api/v1/mms' },
+    { key: 'smsUrl', label: 'SMS endpoint override', advanced: true },
+    { key: 'mmsUrl', label: 'MMS endpoint override', advanced: true },
   ],
 };
 
 let carriers    = [];
 let carrierApps = [];
 let currentPhone = null;
+let tychronPlatformEndpoints = null;
 
 /* ── Toast ── */
 
@@ -163,6 +162,7 @@ async function loadCarrierApps() {
   }
   const data = await r.json();
   carrierApps = data.items || [];
+  tychronPlatformEndpoints = data.tychronEndpoints || null;
   renderAppList();
   populateAppSelect();
 }
@@ -320,6 +320,20 @@ function renderSettingsFields(eCarrierId, existing) {
   const fieldDefs = CARRIER_FIELDS[eCarrierId];
 
   if (fieldDefs) {
+    let advanced;
+    if (Number(eCarrierId) === 8) {
+      const endpoints = document.createElement('div');
+      endpoints.className = 'text-xs text-slate-500 break-all';
+      endpoints.textContent = tychronPlatformEndpoints
+        ? `Platform SMS: ${tychronPlatformEndpoints.smsUrl} · Platform MMS: ${tychronPlatformEndpoints.mmsUrl}`
+        : 'Platform endpoints unavailable. Reload settings to try again.';
+      group.appendChild(endpoints);
+      advanced = document.createElement('details');
+      advanced.open = Boolean(existing.smsUrl || existing.mmsUrl);
+      const summary = document.createElement('summary');
+      summary.textContent = 'Advanced: staging endpoint overrides';
+      advanced.appendChild(summary);
+    }
     // Structured fields for known carrier
     for (const def of fieldDefs) {
       const wrap = document.createElement('div');
@@ -338,8 +352,9 @@ function renderSettingsFields(eCarrierId, existing) {
 
       wrap.appendChild(label);
       wrap.appendChild(input);
-      group.appendChild(wrap);
+      (def.advanced ? advanced : group).appendChild(wrap);
     }
+    if (advanced) group.appendChild(advanced);
   } else {
     // Raw JSON textarea for unknown carriers
     const wrap = document.createElement('div');
@@ -371,7 +386,8 @@ function collectSettings() {
     const settings = {};
     for (const def of fieldDefs) {
       const el = document.getElementById('field-' + def.key);
-      settings[def.key] = el ? el.value.trim() : '';
+      const value = el ? el.value.trim() : '';
+      if (value || !def.advanced) settings[def.key] = value;
     }
     return settings;
   }

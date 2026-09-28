@@ -108,44 +108,6 @@ export async function introspect(
     );
   return parsed.data;
 }
-/** Legacy import verification only; runtime access uses Identity numbers below. */
-export async function availableBusinesses(
-  db: mysql.Pool,
-  identity: PlatformIdentity,
-): Promise<BusinessBinding[]> {
-  const allowed = identity.tenants.filter((t) => t.bEnabled);
-  if (!allowed.length) return [];
-  const [rows] = await db.query<mysql.RowDataPacket[]>(
-    `SELECT m.iOrgId,m.iTenantId,m.iBusinessNumber,o.iBusinessNumber AS currentNumber
-    FROM echo_tbl_PlatformOrgMap m JOIN auth_tbl_Org o ON o.iOrgId=m.iOrgId
-    WHERE m.iTenantId IN (?) ORDER BY m.iTenantId,m.iOrgId`,
-    [allowed.map((t) => t.iTenantId)],
-  );
-  return rows.flatMap((row) => {
-    const id = safeId.parse(Number(row.iTenantId)),
-      org = safeId.parse(Number(row.iOrgId));
-    const own = allowed.find((t) => t.iTenantId === id);
-    if (!own) throw new TenantBoundaryError('Unexpected tenant mapping');
-    if (row.iBusinessNumber == null) return [];
-    const number = Number(row.iBusinessNumber);
-    if (
-      !/^\d{10}$/.test(String(number)) ||
-      number !== Number(row.currentNumber)
-    )
-      throw new TenantBoundaryError(
-        'Business mapping needs administrator reconciliation',
-      );
-    return [
-      {
-        iOrgId: org,
-        iTenantId: id,
-        iBusinessNumber: number,
-        name: own.name,
-        role: own.role,
-      },
-    ];
-  });
-}
 export async function resolvePlatformSession(
   db: mysql.Pool,
   config: AppConfig,
@@ -154,8 +116,8 @@ export async function resolvePlatformSession(
 ): Promise<PlatformSession | null> {
   const identity = await introspect(config, token);
   if (!identity) return null;
-  // Central tenant-number assignments are authority. Legacy Echo user/org tables
-  // retain history only; new platform members need no Echo-local user row.
+  // Central tenant-number assignments are authority; no Echo-local auth or
+  // provenance tables are required.
   const businesses: BusinessBinding[] = identity.numbers
     .filter((n) => n.bEnabled && n.bMessaging)
     .map((n) => {

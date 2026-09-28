@@ -1,3 +1,4 @@
+import { buildInfo } from './buildInfo';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import request from 'supertest';
 import { buildApp } from './app';
@@ -9,16 +10,9 @@ const fake = vi.hoisted(() => ({
 }));
 vi.mock('./db', () => ({
   getDb: () => ({
-    query: async (sql: string, args: unknown[]) => {
+    query: async (sql: string) => {
       fake.queries.push(sql);
-      if (!sql.includes('echo_tbl_PlatformOrgMap'))
-        throw new Error('Unexpected legacy authority query');
-      return [
-        fake.mappings.filter((m) =>
-          (args[0] as number[]).includes(m.iTenantId as number),
-        ),
-        [],
-      ];
+      throw new Error('Identity authorization must not query Echo tables');
     },
   }),
 }));
@@ -233,12 +227,10 @@ describe('Echo central authorization boundary', () => {
     setConfigForTesting({
       ...loadConfig(),
       MEDIA_INTERNAL_BASE_URL: 'http://echo-media:8082',
-      MEDIA_BASE_URL: 'https://legacy-media.x.tld',
     });
     const response = await request(buildApp()).get('/config.js');
-    expect(response.text).toContain('"MEDIA_BASE_URL":"/api/media"');
+    expect(response.text).toContain('"MEDIA_BASE_URL":"/media"');
     expect(response.text).not.toContain('echo-media');
-    expect(response.text).not.toContain('legacy-media');
   });
   it('ignores legacy sessions and returns current central user identifiers', async () => {
     const app = buildApp();
@@ -410,7 +402,7 @@ describe('Echo central authorization boundary', () => {
       ),
     ).toBe(true);
     expect(
-      fake.queries.every((sql) => sql.includes('echo_tbl_PlatformOrgMap')),
+      fake.queries.length === 0,
     ).toBe(true);
   });
   it('does not redeem unsolicited or mismatched callback state', async () => {
@@ -425,4 +417,12 @@ describe('Echo central authorization boundary', () => {
     ).toContain('auth_error=state');
     expect(calls).toHaveLength(0);
   });
+});
+
+it('reports build identity without authentication, settings, or database calls', async () => {
+  const health = await request(buildApp()).get('/healthz');
+  expect(health.status).toBe(200);
+  expect(health.body).toEqual({ ok: true, service: 'EchoWeb', ...buildInfo });
+  expect(fake.queries).toHaveLength(0);
+  expect(calls).toHaveLength(0);
 });

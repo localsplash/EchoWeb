@@ -1,168 +1,104 @@
-import { beforeAll, afterAll, describe, it, expect } from 'vitest';
+import { beforeAll, afterAll, describe, it, expect, vi } from 'vitest';
 import mysql from 'mysql2/promise';
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { availableBusinesses, type PlatformIdentity } from './platformSession';
-const run = promisify(execFile),
-  url = process.env.TEST_DB_URL,
-  source = process.env.ECHO_DATABASE_SOURCE;
-describe.skipIf(!url)('Echo mapping migration and cutover (real MySQL)', () => {
-  let pool: mysql.Pool, dbUrl: string, temp: string;
-  const orgs = [
-    { iOrgId: 1, iTenantId: 11, iBusinessNumber: 7145550001 },
-    { iOrgId: 2, iTenantId: 22, iBusinessNumber: 7145550002 },
-  ];
-  const identity = (tenantIds: number[]): PlatformIdentity => ({
-    active: true,
-    numbers: [],
-    user: { iUserId: 91, email: null, displayName: null, superAdmin: false },
-    selectedTenantId: tenantIds[0] ?? null,
-    tenants: tenantIds.map((iTenantId) => ({
-      iTenantId,
-      name: `Office ${iTenantId}`,
-      slug: `office-${iTenantId}`,
-      role: 'USER',
-      bEnabled: true,
-    })),
-  });
+import { resolvePlatformSession } from './platformSession';
+import type { AppConfig } from './config';
+
+const url = process.env.TEST_DB_URL;
+const source = process.env.ECHO_DATABASE_SOURCE;
+const retired = [
+  'echo_tbl_Settings', 'echo_tbl_PlatformOrgMap', 'echo_tbl_PlatformUserMap',
+  'auth_tbl_Identity', 'auth_tbl_Membership', 'auth_tbl_Session',
+  'auth_tbl_SsoNonce', 'auth_tbl_User', 'auth_tbl_Org',
+];
+const retirement = '013_retire_legacy_configuration_and_auth.sql';
+
+describe.skipIf(!url)('Echo Dev schema retirement (real MySQL)', () => {
+  let pool: mysql.Pool;
+  async function apply(name: string) {
+    const text = fs.readFileSync(path.join(source!, 'init', name), 'utf8')
+      .replaceAll('echo_db', 'echo_platform_test');
+    // MySQL client DELIMITER directives are not SQL; execute each client chunk.
+    let delimiter = ';', statement = '';
+    for (const line of text.split('\n')) {
+      const directive = line.match(/^DELIMITER\s+(\S+)\s*$/i);
+      if (directive) { delimiter = directive[1]; continue; }
+      statement += `${line}\n`;
+      if (statement.trimEnd().endsWith(delimiter)) {
+        const sql = statement.trimEnd().slice(0, -delimiter.length);
+        if (sql.trim()) await pool.query(sql);
+        statement = '';
+      }
+    }
+  }
+  async function tables() {
+    const [rows] = await pool.query<mysql.RowDataPacket[]>('SHOW TABLES');
+    return rows.map((row) => String(Object.values(row)[0]));
+  }
   beforeAll(async () => {
-    if (!source)
-      throw new Error(
-        'Set ECHO_DATABASE_SOURCE to the reviewed EchoDatabase checkout mounted beneath /app',
-      );
+    if (!source) throw new Error('Set ECHO_DATABASE_SOURCE to the matching EchoDatabase checkout');
     const parsed = new URL(url!);
-    parsed.pathname = '/echo_platform_test';
-    dbUrl = parsed.toString();
     const admin = await mysql.createConnection({
-      host: parsed.hostname,
-      port: Number(parsed.port || 3306),
-      user: decodeURIComponent(parsed.username),
-      password: decodeURIComponent(parsed.password),
+      host: parsed.hostname, port: Number(parsed.port || 3306),
+      user: decodeURIComponent(parsed.username), password: decodeURIComponent(parsed.password),
     });
+    // This test can recreate only its explicitly named disposable schema.
     await admin.query('DROP DATABASE IF EXISTS echo_platform_test');
     await admin.query('CREATE DATABASE echo_platform_test');
     await admin.end();
-    pool = mysql.createPool({
-      uri: dbUrl,
-      multipleStatements: true,
-      timezone: 'Z',
-    });
-    const sql = (name: string) =>
-      fs
-        .readFileSync(path.join(source, 'init', name), 'utf8')
-        .replace('USE echo_db;', '');
-    await pool.query(sql('005_auth.sql'));
-    await pool.query(`INSERT INTO auth_tbl_Org (iOrgId,iBusinessNumber,displayName) VALUES (1,7145550001,'First'),(2,7145550002,'Second');
-    INSERT INTO auth_tbl_User (iUserId,email) VALUES (7,'old@x.tld');
-    INSERT INTO auth_tbl_Session (sSessionId,iUserId,iOrgId,dtExpires) VALUES ('legacy-session',7,1,DATE_ADD(NOW(),INTERVAL 1 DAY));
-    CREATE TABLE sms_tbl_Message (iMessageId BIGINT PRIMARY KEY,body TEXT);INSERT INTO sms_tbl_Message VALUES (100,'Preserved history');`);
-    await pool.query(sql('012_platform_identity_mappings.sql'));
-    await pool.query(sql('012_platform_identity_mappings.sql'));
-    temp = fs.mkdtempSync(path.join(os.tmpdir(), 'echo-map-test-'));
+    parsed.pathname = '/echo_platform_test';
+    pool = mysql.createPool({ uri: parsed.toString(), multipleStatements: true, timezone: 'Z' });
+    for (const name of fs.readdirSync(path.join(source, 'init')).filter((name) => name.endsWith('.sql')).sort()) await apply(name);
   });
-  afterAll(async () => {
-    await pool?.end();
-    if (temp) fs.rmSync(temp, { recursive: true, force: true });
+  afterAll(async () => { vi.unstubAllGlobals(); await pool?.end(); });
+
+  it('fresh initialization creates messaging tables and routines without retired objects', async () => {
+    const names = await tables();
+    for (const name of retired) expect(names).not.toContain(name);
+    expect(names).toContain('sms_tbl_Message');
+    await pool.query('CALL sms_usp_Message_INS(?, ?, ?, ?, ?, ?, ?)', [
+      'retirement-test', 1, 7145550001, 7145550002, 'Active messaging fixture', '2026-09-08 00:00:00.000', 1,
+    ]);
+    const [messages] = await pool.query<mysql.RowDataPacket[]>("SELECT text FROM sms_tbl_Message WHERE sMessageId='retirement-test'");
+    expect(messages[0].text).toBe('Active messaging fixture');
   });
-  async function importMap(data: unknown, apply = false) {
-    const file = path.join(temp, `manifest-${Math.random()}.json`);
-    fs.writeFileSync(file, JSON.stringify(data));
-    return run(
-      process.execPath,
-      [
-        path.join(source!, 'scripts/import-platform-mappings.mjs'),
-        file,
-        ...(apply ? ['--apply'] : []),
-      ],
-      { env: { ...process.env, ECHO_DB_URL: dbUrl } },
-    );
-  }
-  it('is additive/idempotent and leaves historical user/session/message data intact', async () => {
-    const [sessions] = await pool.query<mysql.RowDataPacket[]>(
-      'SELECT sSessionId FROM auth_tbl_Session',
-    );
-    expect(sessions[0].sSessionId).toBe('legacy-session');
-    const [messages] = await pool.query<mysql.RowDataPacket[]>(
-      'SELECT body FROM sms_tbl_Message',
-    );
-    expect(messages[0].body).toBe('Preserved history');
-    const [tables] = await pool.query<mysql.RowDataPacket[]>(
-      "SHOW TABLES LIKE 'identity_%'",
-    );
-    expect(tables).toHaveLength(0);
-  });
-  it('validates without writes by default, then commits repeatable reviewed mappings', async () => {
-    const manifest = {
-      organizations: orgs,
-      users: [{ iEchoUserId: 7, iPlatformUserId: 91 }],
-    };
-    await importMap(manifest);
-    expect(await availableBusinesses(pool, identity([11, 22]))).toEqual([]);
-    await importMap(manifest, true);
-    await importMap(manifest, true);
-    expect(
-      (await availableBusinesses(pool, identity([11]))).map(
-        (b) => b.iBusinessNumber,
-      ),
-    ).toEqual([7145550001]);
-    expect(
-      (await availableBusinesses(pool, identity([22]))).map(
-        (b) => b.iBusinessNumber,
-      ),
-    ).toEqual([7145550002]);
-  });
-  it('rejects canonical-ID remapping, changed source numbers and unsafe IDs atomically', async () => {
-    await expect(
-      importMap(
-        { organizations: [{ ...orgs[0], iTenantId: 22 }], users: [] },
-        true,
-      ),
-    ).rejects.toThrow();
-    await expect(
-      importMap(
-        {
-          organizations: [{ ...orgs[0], iBusinessNumber: 7145550099 }],
-          users: [],
-        },
-        true,
-      ),
-    ).rejects.toThrow();
-    await expect(
-      importMap(
-        {
-          organizations: [],
-          users: [{ iEchoUserId: 7, iPlatformUserId: 9007199254740992 }],
-        },
-        true,
-      ),
-    ).rejects.toThrow();
-    const [rows] = await pool.query<mysql.RowDataPacket[]>(
-      'SELECT iTenantId FROM echo_tbl_PlatformOrgMap WHERE iOrgId=1',
-    );
-    expect(rows[0].iTenantId).toBe(11);
-  });
-  it('supports several reviewed numbers in one tenant and refuses number reassignment', async () => {
-    await pool.query(
-      'INSERT INTO auth_tbl_Org (iOrgId,iBusinessNumber) VALUES (3,7145550003)',
-    );
-    await importMap(
-      {
-        organizations: [
-          { iOrgId: 3, iTenantId: 11, iBusinessNumber: 7145550003 },
-        ],
-        users: [],
-      },
-      true,
-    );
-    expect(await availableBusinesses(pool, identity([11]))).toHaveLength(2);
-    await pool.query(
-      'UPDATE auth_tbl_Org SET iBusinessNumber=7145550099 WHERE iOrgId=3',
-    );
-    await expect(availableBusinesses(pool, identity([11]))).rejects.toThrow(
-      'reconciliation',
-    );
+
+  it('drops populated legacy tables in FK order, retains messaging and ledger, and is repeatable', async () => {
+    await pool.query(`
+      CREATE TABLE auth_tbl_User (iUserId BIGINT PRIMARY KEY);
+      CREATE TABLE auth_tbl_Org (iOrgId BIGINT PRIMARY KEY);
+      CREATE TABLE auth_tbl_Identity (iIdentityId BIGINT PRIMARY KEY,iUserId BIGINT,FOREIGN KEY(iUserId) REFERENCES auth_tbl_User(iUserId));
+      CREATE TABLE auth_tbl_Membership (iMembershipId BIGINT PRIMARY KEY,iUserId BIGINT,iOrgId BIGINT,FOREIGN KEY(iUserId) REFERENCES auth_tbl_User(iUserId),FOREIGN KEY(iOrgId) REFERENCES auth_tbl_Org(iOrgId));
+      CREATE TABLE auth_tbl_Session (sSessionId VARCHAR(64) PRIMARY KEY);
+      CREATE TABLE auth_tbl_SsoNonce (sNonce VARCHAR(32) PRIMARY KEY);
+      CREATE TABLE echo_tbl_PlatformUserMap (iEchoUserId BIGINT PRIMARY KEY,FOREIGN KEY(iEchoUserId) REFERENCES auth_tbl_User(iUserId));
+      CREATE TABLE echo_tbl_PlatformOrgMap (iOrgId BIGINT PRIMARY KEY,FOREIGN KEY(iOrgId) REFERENCES auth_tbl_Org(iOrgId));
+      CREATE TABLE echo_tbl_Settings (sKey VARCHAR(128) PRIMARY KEY,sValue TEXT);
+      CREATE TABLE echo_tbl_SchemaMigration (sFile VARCHAR(255) PRIMARY KEY);
+      INSERT INTO auth_tbl_User VALUES (7); INSERT INTO auth_tbl_Org VALUES (8);
+      INSERT INTO auth_tbl_Identity VALUES (1,7); INSERT INTO auth_tbl_Membership VALUES (1,7,8);
+      INSERT INTO auth_tbl_Session VALUES ('obsolete'); INSERT INTO auth_tbl_SsoNonce VALUES ('obsolete');
+      INSERT INTO echo_tbl_PlatformUserMap VALUES (7); INSERT INTO echo_tbl_PlatformOrgMap VALUES (8);
+      INSERT INTO echo_tbl_Settings VALUES ('obsolete','discard this');
+      INSERT INTO echo_tbl_SchemaMigration VALUES ('009_settings.sql');
+    `);
+    await apply(retirement);
+    await apply(retirement);
+    const names = await tables();
+    for (const name of retired) expect(names).not.toContain(name);
+    const [ledger] = await pool.query<mysql.RowDataPacket[]>('SELECT sFile FROM echo_tbl_SchemaMigration');
+    expect(ledger[0].sFile).toBe('009_settings.sql');
+    const [messages] = await pool.query<mysql.RowDataPacket[]>("SELECT text FROM sms_tbl_Message WHERE sMessageId='retirement-test'");
+    expect(messages[0].text).toBe('Active messaging fixture');
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({
+      active: true, user: { iUserId: 91, email: null, displayName: null, superAdmin: false },
+      tenants: [{ iTenantId: 11, name: 'Office', slug: 'office', role: 'USER', bEnabled: true }],
+      selectedTenantId: 11,
+      numbers: [{ iPhoneNumberId: 1, iTenantId: 11, phoneNumber: '+17145550001', label: '', bVoice: true, bMessaging: true, bEnabled: true, accessPolicy: 'TENANT_MEMBERS', iVersion: 1 }],
+    }) })));
+    const session = await resolvePlatformSession(pool, { IDENTITY_BASE_URL: 'http://identity' } as AppConfig, 'a'.repeat(64), null);
+    expect(session?.iBusinessNumber).toBe(7145550001);
+    expect(session?.iOrgId).toBeNull();
   });
 });

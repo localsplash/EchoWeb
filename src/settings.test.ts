@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { IdentitySettingsStore } from './settings';
+import { PlatformSettingsStore } from './settings';
 const config = { NOCODB_BASE_URL: 'http://nocodb', NOCODB_API_TOKEN: 'token' };
 afterEach(() => vi.unstubAllGlobals());
 function stub(rows: unknown[], legacy = false) {
@@ -43,7 +43,7 @@ describe('explicit PlatformConfig rollout', () => {
         settingValue: 'private',
       },
     ]);
-    expect(await new IdentitySettingsStore(config).get()).toEqual({
+    expect(await new PlatformSettingsStore(config).get()).toEqual({
       PARENT_DOMAIN: 'x.tld',
       PUSHER_KEY: 'web',
     });
@@ -53,20 +53,12 @@ describe('explicit PlatformConfig rollout', () => {
       { app: 'echo-web', settingKey: 'KEY', settingValue: 'a' },
       { app: 'echo-web', settingKey: 'KEY', settingValue: 'a' },
     ]);
-    await expect(new IdentitySettingsStore(config).get()).rejects.toThrow(
+    await expect(new PlatformSettingsStore(config).get()).rejects.toThrow(
       'Duplicate',
     );
   });
-  it('requires explicit legacy mode instead of silently falling back', async () => {
+  it('has no legacy source even when only IdentityBase is available', async () => {
     stub([{ Key: 'PARENT_DOMAIN', Value: 'old.tld' }], true);
-    await expect(new IdentitySettingsStore(config).get()).rejects.toThrow(
-      'PlatformConfig',
-    );
-    expect(
-      await new IdentitySettingsStore({
-        ...config,
-        SETTINGS_MODE: 'legacy',
-      }).get(),
-    ).toEqual({ PARENT_DOMAIN: 'old.tld' });
+    await expect(new PlatformSettingsStore(config).get()).rejects.toThrow('PlatformConfig');
   });
 });
