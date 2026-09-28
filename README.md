@@ -46,8 +46,10 @@ to 3306. Use the separate read-only `echo_web` account, with its credentials in
 `echo-web` scope. Set DB_NAME explicitly. The pool opens on first use and retains
 its coordinates until restart. `/readyz` returns 503 with `database_unconfigured`
 for missing/invalid coordinates and `database_unreachable` for connection/query
-failure. `/healthz` stays independent. AidaPlatformDB/echo's operator jobs take admin
-credentials separately; never put the MySQL admin password in PlatformConfig.
+failure. `/healthz` stays independent. AidaPlatformDB/echo's deploy-time jobs run
+as `echo_admin`, an account scoped to `echo_db` whose password is the
+`echo/MYSQL_ADMIN_PASSWORD` row; the MySQL root password never becomes a row and
+never leaves the database host.
 
 ## Public and private APIs
 
