@@ -76,30 +76,18 @@
     <section class="bg-white rounded-2xl border border-slate-200 shadow-sm mb-6">
       <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
         <h2 class="text-sm font-semibold text-slate-700 uppercase tracking-wide">Sign-in Methods</h2>
-        <div class="flex items-center gap-2">
-          <a href="/auth/google/link?return=/settings"
-            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold transition-colors">
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/>
-            </svg>
-            Link Google
-          </a>
-          <a id="linkMicrosoftBtn" href="/auth/microsoft/link?return=/settings"
-            class="hidden items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold transition-colors">
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/>
-            </svg>
-            Link Microsoft
-          </a>
-        </div>
+        <a href="/auth/link"
+          class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold transition-colors">
+          Manage in Identity
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"/>
+          </svg>
+        </a>
       </div>
-      <p class="px-6 pt-4 text-xs text-slate-500">
-        Any of these can be used to sign in to Echo. You can link more than one
-        Google or Microsoft account.
+      <p class="px-6 py-4 text-sm text-slate-500">
+        Your Google, Microsoft and email sign-ins are kept in Identity and work
+        for every app on the platform, including Echo. Link or remove them there.
       </p>
-      <div id="identityList" class="px-6 py-4 space-y-2">
-        <div class="text-sm text-slate-400">Loading…</div>
-      </div>
     </section>
 
     <!-- Carrier Applications -->
