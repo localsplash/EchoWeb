@@ -164,7 +164,8 @@ async function loadCarrierApps() {
   const data = await r.json();
   carrierApps = data.items || [];
   tychronPlatformEndpoints = data.tychronEndpoints || null;
-  carrierWebhookUrls = data.webhookUrls || null;
+  // Absent (not null) means EchoService predates the field.
+  carrierWebhookUrls = 'webhookUrls' in data ? data.webhookUrls : undefined;
   renderAppList();
   populateAppSelect();
 }
@@ -422,7 +423,9 @@ function renderCallbackUrls(eCarrierId, group) {
   if (!carrierWebhookUrls) {
     const missing = document.createElement('div');
     missing.className = 'text-xs text-slate-500';
-    missing.textContent = 'Unavailable: set PARENT_DOMAIN in PlatformConfig for Echo, then reload this page.';
+    missing.textContent = carrierWebhookUrls === undefined
+      ? 'Unavailable: EchoService on this environment is older than this page. Redeploy Echo (install.sh apps), then reload.'
+      : 'Unavailable: EchoService found no usable PARENT_DOMAIN (scopes *, echo or echo-service). Set it to the bare domain, such as example.com, then reload in 30 seconds.';
     box.appendChild(missing);
     group.appendChild(box);
     return;
