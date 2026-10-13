@@ -40,6 +40,7 @@ let carriers    = [];
 let carrierApps = [];
 let currentPhone = null;
 let tychronPlatformEndpoints = null;
+let carrierWebhookUrls = null;
 
 /* ── Toast ── */
 
@@ -163,6 +164,7 @@ async function loadCarrierApps() {
   const data = await r.json();
   carrierApps = data.items || [];
   tychronPlatformEndpoints = data.tychronEndpoints || null;
+  carrierWebhookUrls = data.webhookUrls || null;
   renderAppList();
   populateAppSelect();
 }
@@ -318,6 +320,7 @@ function renderSettingsFields(eCarrierId, existing) {
   if (!eCarrierId) return;
 
   const fieldDefs = CARRIER_FIELDS[eCarrierId];
+  renderCallbackUrls(Number(eCarrierId), group);
 
   if (fieldDefs) {
     let advanced;
@@ -325,7 +328,7 @@ function renderSettingsFields(eCarrierId, existing) {
       const endpoints = document.createElement('div');
       endpoints.className = 'text-xs text-slate-500 break-all';
       endpoints.textContent = tychronPlatformEndpoints
-        ? `Platform SMS: ${tychronPlatformEndpoints.smsUrl} · Platform MMS: ${tychronPlatformEndpoints.mmsUrl}`
+        ? `Echo sends through Tychron at SMS: ${tychronPlatformEndpoints.smsUrl} · MMS: ${tychronPlatformEndpoints.mmsUrl}`
         : 'Platform endpoints unavailable. Reload settings to try again.';
       group.appendChild(endpoints);
       advanced = document.createElement('details');
@@ -375,6 +378,99 @@ function renderSettingsFields(eCarrierId, existing) {
     wrap.appendChild(ta);
     group.appendChild(wrap);
   }
+}
+
+/* ── Callback URLs to register with the carrier ── */
+
+// What the operator types into the carrier's own portal so inbound messages and
+// delivery reports reach Echo. EchoService builds them from this environment's
+// PARENT_DOMAIN; they are the same for every application of a carrier.
+const CALLBACK_URLS = {
+  1: { // Bandwidth
+    carrier: 'Bandwidth',
+    where: 'In the Bandwidth messaging application',
+    urls: (w) => [
+      { label: 'Inbound callback URL', url: w.bandwidth.inbound },
+      { label: 'Status (outbound) callback URL', url: w.bandwidth.status },
+    ],
+    note: 'If Bandwidth offers a single callback URL, use the inbound one; it accepts status events too.',
+    auth: (w) => w.bandwidth.basicAuth,
+  },
+  8: { // Tychron
+    carrier: 'Tychron',
+    where: 'On each number\'s Switch in the Tychron Atlas portal',
+    urls: (w) => [
+      { label: 'SMS callback URL', url: w.tychron.sms },
+      { label: 'MMS callback URL', url: w.tychron.mms },
+    ],
+    note: '',
+    auth: (w) => w.tychron.basicAuth,
+  },
+};
+
+function renderCallbackUrls(eCarrierId, group) {
+  const spec = CALLBACK_URLS[eCarrierId];
+  if (!spec) return;
+
+  const box = document.createElement('div');
+  box.className = 'rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3 space-y-2';
+  const heading = document.createElement('div');
+  heading.className = 'text-xs font-semibold text-slate-700';
+  heading.textContent = 'URLs to give ' + spec.carrier;
+  box.appendChild(heading);
+
+  if (!carrierWebhookUrls) {
+    const missing = document.createElement('div');
+    missing.className = 'text-xs text-slate-500';
+    missing.textContent = 'Unavailable: set PARENT_DOMAIN in PlatformConfig for Echo, then reload this page.';
+    box.appendChild(missing);
+    group.appendChild(box);
+    return;
+  }
+
+  const where = document.createElement('div');
+  where.className = 'text-xs text-slate-500';
+  where.textContent = spec.where + ', set these (method POST):';
+  box.appendChild(where);
+
+  for (const { label, url } of spec.urls(carrierWebhookUrls)) {
+    const row = document.createElement('div');
+    const name = document.createElement('div');
+    name.className = 'text-xs font-medium text-slate-500';
+    name.textContent = label;
+    const line = document.createElement('div');
+    line.className = 'flex items-center gap-2';
+    const value = document.createElement('code');
+    value.className = 'flex-1 min-w-0 break-all text-xs text-slate-800 bg-white border border-slate-200 rounded-lg px-2 py-1.5';
+    value.textContent = url;
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'shrink-0 px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 text-xs font-medium transition-colors';
+    copy.textContent = 'Copy';
+    copy.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(url);
+        showToast('Copied ' + label + '.');
+      } catch {
+        showToast('Could not copy; select the URL instead.', false);
+      }
+    };
+    line.appendChild(value);
+    line.appendChild(copy);
+    row.appendChild(name);
+    row.appendChild(line);
+    box.appendChild(row);
+  }
+
+  const auth = spec.auth(carrierWebhookUrls);
+  const authNote = document.createElement('div');
+  authNote.className = 'text-xs text-slate-500';
+  authNote.textContent = 'Authentication: HTTP Basic, using ' + auth.user + ' and ' + auth.password
+    + ' from PlatformConfig (echo-service scope). Do not put the credentials in the URL.'
+    + (spec.note ? ' ' + spec.note : '');
+  box.appendChild(authNote);
+
+  group.appendChild(box);
 }
 
 function collectSettings() {
