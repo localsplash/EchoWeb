@@ -9,6 +9,7 @@ import { loadConfig, loadEnv, ensureFreshConfig } from './config';
 import { SettingsUnavailableError } from './settings';
 import { getDb, DatabaseNotConfiguredError } from './db';
 import { registerMediaRoute } from './media';
+import { registerIdentityEventsRoute } from './identityEvents';
 import {
   getSessionIdFromRequest,
   setSessionCookie,
@@ -153,6 +154,8 @@ export function buildApp() {
   });
   const app = express();
 
+  // Ahead of the JSON parser: the signature is over the raw body.
+  registerIdentityEventsRoute(app, logger);
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: false }));
   app.use(

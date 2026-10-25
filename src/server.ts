@@ -1,6 +1,7 @@
 import './timezone';
 import { buildApp } from './app';
-import { loadEnv, refreshConfig } from './config';
+import { ensureFreshConfig, loadEnv, refreshConfig } from './config';
+import { startIdentityRegistration } from './identityEvents';
 
 const RETRY_DELAY_MS = 5_000;
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -33,6 +34,8 @@ async function main() {
   const app = buildApp();
   app.listen(env.PORT, () => {
     console.log(`EchoWeb listening on :${env.PORT}`);
+    // After listen, so the ping Identity sends on registration is answered.
+    startIdentityRegistration(ensureFreshConfig);
   });
 }
 
